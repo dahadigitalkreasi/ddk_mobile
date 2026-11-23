@@ -11,11 +11,8 @@ permissions:
 
 jobs:
   build:
-    name: Build and Release Shorebird APK
+    name: Build and Release APK
     runs-on: ubuntu-latest
-
-    env:
-      SHOREBIRD_TOKEN: ${{ secrets.SHOREBIRD_TOKEN }}
 
     steps:
       # ================================
@@ -44,21 +41,13 @@ jobs:
           cache: true
 
       # ================================
-      # 4. SETUP SHOREBIRD
-      # ================================
-      - name: Setup Shorebird
-        uses: shorebirdtech/setup-shorebird@v1
-        with:
-          cache: true
-
-      # ================================
-      # 5. INSTALL DEPENDENCIES
+      # 4. INSTALL DEPENDENCIES
       # ================================
       - name: Install Dependencies
         run: flutter pub get
 
       # ================================
-      # 6. VERIFIKASI VERSI RELEASE
+      # 5. VERIFIKASI VERSI RELEASE
       # ================================
       - name: Verify Release Version
         shell: bash
@@ -77,27 +66,7 @@ jobs:
           echo "Versi release valid: $VERSION"
 
       # ================================
-      # 7. CEK KONFIGURASI SHOREBIRD
-      # ================================
-      - name: Verify Shorebird Configuration
-        shell: bash
-        run: |
-          test -f shorebird.yaml || {
-            echo "ERROR: shorebird.yaml tidak ditemukan."
-            echo "Jalankan shorebird init di project dan commit file tersebut."
-            exit 1
-          }
-
-          test -n "$SHOREBIRD_TOKEN" || {
-            echo "ERROR: SHOREBIRD_TOKEN belum tersedia."
-            exit 1
-          }
-
-          shorebird --version
-          echo "Konfigurasi Shorebird tersedia."
-
-      # ================================
-      # 8. RESTORE ANDROID SIGNING
+      # 6. RESTORE ANDROID SIGNING
       # ================================
       - name: Restore Android Signing
         shell: bash
@@ -140,23 +109,22 @@ jobs:
           echo "Android signing berhasil disiapkan."
 
       # ================================
-      # 9. PERIKSA KODE FLUTTER
+      # 7. PERIKSA KODE FLUTTER
       # ================================
       - name: Flutter Analyze
         run: flutter analyze
 
       # ================================
-      # 10. BUILD APK MENGGUNAKAN SHOREBIRD
+      # 8. BUILD APK
       # ================================
-      - name: Build Shorebird Android APK
+      - name: Build Android APK
         shell: bash
         env:
           REVERB_WS_URL: ${{ vars.REVERB_WS_URL }}
           REVERB_APP_KEY: ${{ secrets.REVERB_APP_KEY }}
         run: |
           ARGS=(
-            --artifact apk
-            --flutter-version=3.47.9
+            --release
             --dart-define=API_BASE_URL=https://sandbox.dahakreasidigital.my.id/api
           )
 
@@ -165,46 +133,24 @@ jobs:
               "--dart-define=REVERB_WS_URL=$REVERB_WS_URL"
               "--dart-define=REVERB_APP_KEY=$REVERB_APP_KEY"
             )
-          elif [ -n "$REVERB_WS_URL" ] || [ -n "$REVERB_APP_KEY" ]; then
-            echo "ERROR: Konfigurasi Reverb belum lengkap."
-            exit 1
           else
             echo "Reverb belum dikonfigurasi untuk build ini."
           fi
 
-          shorebird release android "${ARGS[@]}"
+          flutter build apk "${ARGS[@]}"
 
       # ================================
-      # 11. SIAPKAN APK HASIL BUILD
-      # ================================
-      - name: Prepare APK
-        shell: bash
-        run: |
-          APK="build/app/outputs/flutter-apk/app-release.apk"
-
-          if [ ! -f "$APK" ]; then
-            echo "ERROR: APK Shorebird tidak ditemukan."
-            find build/app/outputs -name "*.apk" -type f || true
-            exit 1
-          fi
-
-          mkdir -p release
-          cp "$APK" "release/DDK-Mobile-${GITHUB_REF_NAME}.apk"
-
-          echo "APK Shorebird siap diunggah."
-
-      # ================================
-      # 12. UPLOAD APK ARTIFACT
+      # 9. UPLOAD APK ARTIFACT
       # ================================
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: DahaDigitalKreasi-Shorebird-APK
-          path: release/*.apk
+          name: DahaDigitalKreasi-APK
+          path: build/app/outputs/flutter-apk/app-release.apk
           if-no-files-found: error
 
       # ================================
-      # 13. PUBLIKASIKAN GITHUB RELEASE
+      # 10. PUBLIKASIKAN RELEASE
       # ================================
       - name: Publish GitHub Release
         shell: bash
@@ -212,7 +158,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release create "$GITHUB_REF_NAME" \
-            release/*.apk \
-            --title "DDK Mobile $GITHUB_REF_NAME - Shorebird OTA" \
+            build/app/outputs/flutter-apk/app-release.apk \
+            --title "DahaDigitalKreasi $GITHUB_REF_NAME" \
             --generate-notes \
             --verify-tag
