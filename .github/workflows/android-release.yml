@@ -10,17 +10,45 @@ permissions:
   contents: write
 
 jobs:
-  release:
-    name: Prepare Shorebird APK Release
+  build:
+    name: Build and Release APK
     runs-on: ubuntu-latest
 
-    env:
-      API_BASE_URL: https://sandbox.dahakreasidigital.my.id/api
-
     steps:
+      # ================================
+      # 1. AMBIL SOURCE CODE
+      # ================================
       - name: Checkout Repository
         uses: actions/checkout@v4
 
+      # ================================
+      # 2. SETUP JAVA
+      # ================================
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      # ================================
+      # 3. SETUP FLUTTER
+      # ================================
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.47.9'
+          channel: stable
+          cache: true
+
+      # ================================
+      # 4. INSTALL DEPENDENCIES
+      # ================================
+      - name: Install Dependencies
+        run: flutter pub get
+
+      # ================================
+      # 5. VERIFIKASI VERSI RELEASE
+      # ================================
       - name: Verify Release Version
         shell: bash
         run: |
@@ -29,26 +57,114 @@ jobs:
             | cut -d'+' -f1)
 
           if [ "v$VERSION" != "$GITHUB_REF_NAME" ]; then
-            echo "Versi pubspec.yaml tidak sesuai tag."
+            echo "ERROR: Versi pubspec.yaml tidak sesuai tag."
             echo "Pubspec: $VERSION"
             echo "Tag: $GITHUB_REF_NAME"
             exit 1
           fi
 
-          echo "Versi valid: $VERSION"
+          echo "Versi release valid: $VERSION"
 
-      - name: Verify VPS Configuration
+      # ================================
+      # 6. RESTORE ANDROID SIGNING
+      # ================================
+      - name: Restore Android Signing
         shell: bash
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          STORE_PASSWORD: ${{ secrets.ANDROID_STORE_PASSWORD }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
         run: |
-          echo "Target API VPS: $API_BASE_URL"
+          test -n "$KEYSTORE_BASE64" || {
+            echo "ERROR: ANDROID_KEYSTORE_BASE64 belum tersedia"
+            exit 1
+          }
 
-      - name: Create Draft GitHub Release
+          test -n "$STORE_PASSWORD" || {
+            echo "ERROR: ANDROID_STORE_PASSWORD belum tersedia"
+            exit 1
+          }
+
+          test -n "$KEY_PASSWORD" || {
+            echo "ERROR: ANDROID_KEY_PASSWORD belum tersedia"
+            exit 1
+          }
+
+          test -n "$KEY_ALIAS" || {
+            echo "ERROR: ANDROID_KEY_ALIAS belum tersedia"
+            exit 1
+          }
+
+          echo "$KEYSTORE_BASE64" | base64 --decode \
+            > android/app/upload-keystore.jks
+
+          {
+            echo "storePassword=$STORE_PASSWORD"
+            echo "keyPassword=$KEY_PASSWORD"
+            echo "keyAlias=$KEY_ALIAS"
+            echo "storeFile=upload-keystore.jks"
+          } > android/key.properties
+
+          echo "Android signing berhasil disiapkan."
+
+      # ================================
+      # 7. PERIKSA KODE FLUTTER
+      # ================================
+      - name: Flutter Analyze
+        run: flutter analyze
+
+      # ================================
+      # 8. BUILD APK KE DOMAIN VPS
+      # ================================
+      - name: Build Android APK
+        shell: bash
+        env:
+          REVERB_WS_URL: ${{ vars.REVERB_WS_URL }}
+          REVERB_APP_KEY: ${{ secrets.REVERB_APP_KEY }}
+        run: |
+          ARGS=(
+            --release
+            --dart-define=API_BASE_URL=https://sandbox.dahakreasidigital.my.id/api
+          )
+
+          if [ -n "$REVERB_WS_URL" ] && [ -n "$REVERB_APP_KEY" ]; then
+            ARGS+=(
+              "--dart-define=REVERB_WS_URL=$REVERB_WS_URL"
+              "--dart-define=REVERB_APP_KEY=$REVERB_APP_KEY"
+            )
+          else
+            echo "Reverb belum dikonfigurasi untuk build ini."
+          fi
+
+          flutter build apk "${ARGS[@]}"
+
+      # ================================
+      # 9. UPLOAD APK ARTIFACT
+      # ================================
+      - name: Upload APK Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: DahaDigitalKreasi-APK
+          path: build/app/outputs/flutter-apk/app-release.apk
+          if-no-files-found: error
+
+      # ================================
+      # 10. PUBLIKASIKAN RELEASE
+      # ================================
+      - name: Publish GitHub Release
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "$GITHUB_REF_NAME" \
-            --title "DDK Mobile $GITHUB_REF_NAME - Shorebird OTA" \
-            --generate-notes \
-            --verify-tag \
-            --draft
+          APK="build/app/outputs/flutter-apk/app-release.apk"
+
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" "$APK" --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" \
+              "$APK" \
+              --title "DahaDigitalKreasi $GITHUB_REF_NAME" \
+              --generate-notes \
+              --verify-tag
+          fi
