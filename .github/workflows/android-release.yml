@@ -123,17 +123,6 @@ jobs:
           echo "APK ditemukan: $APK"
           echo "path=$APK" >> "$GITHUB_OUTPUT"
 
-        id: apk
-        shell: bash
-        run: |
-          APK="build/app/outputs/apk/release/app-release.apk"
-
-          test -f "$APK" || {
-            echo "ERROR: APK Shorebird tidak ditemukan."
-            exit 1
-          }
-
-          echo "path=$APK" >> "$GITHUB_OUTPUT"
 
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
