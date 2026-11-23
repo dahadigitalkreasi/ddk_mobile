@@ -1,5 +1,5 @@
 
-name: DahaDigitalKreasi Android Release
+name: DahaDigitalKreasi Shorebird Android Release
 
 on:
   push:
@@ -9,30 +9,28 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: android-release
+  cancel-in-progress: false
+
 jobs:
-  build:
-    name: Build and Release APK
+  release:
+    name: Build Shorebird APK
     runs-on: ubuntu-latest
 
+    env:
+      SHOREBIRD_TOKEN: ${{ secrets.SHOREBIRD_TOKEN }}
+
     steps:
-      # ================================
-      # 1. AMBIL SOURCE CODE
-      # ================================
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      # ================================
-      # 2. SETUP JAVA
-      # ================================
       - name: Setup Java
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
 
-      # ================================
-      # 3. SETUP FLUTTER
-      # ================================
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
@@ -40,34 +38,25 @@ jobs:
           channel: stable
           cache: true
 
-      # ================================
-      # 4. INSTALL DEPENDENCIES
-      # ================================
-      - name: Install Dependencies
-        run: flutter pub get
+      - name: Setup Shorebird
+        uses: shorebirdtech/setup-shorebird@v1
 
-      # ================================
-      # 5. VERIFIKASI VERSI RELEASE
-      # ================================
       - name: Verify Release Version
         shell: bash
         run: |
-          VERSION=$(grep '^version:' pubspec.yaml \
-            | awk '{print $2}' \
-            | cut -d'+' -f1)
+          VERSION=$(awk '/^version:/ {print $2}' pubspec.yaml)
+          VERSION_NAME="${VERSION%%+*}"
 
-          if [ "v$VERSION" != "$GITHUB_REF_NAME" ]; then
+          if [ "v$VERSION_NAME" != "$GITHUB_REF_NAME" ]; then
             echo "ERROR: Versi pubspec.yaml tidak sesuai tag."
-            echo "Pubspec: $VERSION"
-            echo "Tag: $GITHUB_REF_NAME"
             exit 1
           fi
 
-          echo "Versi release valid: $VERSION"
+          test -n "$SHOREBIRD_TOKEN" || {
+            echo "ERROR: SHOREBIRD_TOKEN belum tersedia."
+            exit 1
+          }
 
-      # ================================
-      # 6. RESTORE ANDROID SIGNING
-      # ================================
       - name: Restore Android Signing
         shell: bash
         env:
@@ -76,27 +65,14 @@ jobs:
           KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
           KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
         run: |
-          test -n "$KEYSTORE_BASE64" || {
-            echo "ERROR: ANDROID_KEYSTORE_BASE64 belum tersedia"
-            exit 1
-          }
+          for VAR in KEYSTORE_BASE64 STORE_PASSWORD KEY_PASSWORD KEY_ALIAS; do
+            test -n "${!VAR}" || {
+              echo "ERROR: Missing signing configuration: $VAR"
+              exit 1
+            }
+          done
 
-          test -n "$STORE_PASSWORD" || {
-            echo "ERROR: ANDROID_STORE_PASSWORD belum tersedia"
-            exit 1
-          }
-
-          test -n "$KEY_PASSWORD" || {
-            echo "ERROR: ANDROID_KEY_PASSWORD belum tersedia"
-            exit 1
-          }
-
-          test -n "$KEY_ALIAS" || {
-            echo "ERROR: ANDROID_KEY_ALIAS belum tersedia"
-            exit 1
-          }
-
-          echo "$KEYSTORE_BASE64" | base64 --decode \
+          printf '%s' "$KEYSTORE_BASE64" | base64 --decode \
             > android/app/upload-keystore.jks
 
           {
@@ -106,25 +82,21 @@ jobs:
             echo "storeFile=upload-keystore.jks"
           } > android/key.properties
 
-          echo "Android signing berhasil disiapkan."
+      - name: Install Dependencies
+        run: flutter pub get
 
-      # ================================
-      # 7. PERIKSA KODE FLUTTER
-      # ================================
       - name: Flutter Analyze
         run: flutter analyze
 
-      # ================================
-      # 8. BUILD APK KE DOMAIN VPS
-      # ================================
-      - name: Build Android APK
+      - name: Build Shorebird Release
         shell: bash
         env:
           REVERB_WS_URL: ${{ vars.REVERB_WS_URL }}
           REVERB_APP_KEY: ${{ secrets.REVERB_APP_KEY }}
         run: |
           ARGS=(
-            --release
+            --artifact apk
+            --flutter-version=3.47.9
             --dart-define=API_BASE_URL=https://sandbox.dahakreasidigital.my.id/api
           )
 
@@ -133,38 +105,45 @@ jobs:
               "--dart-define=REVERB_WS_URL=$REVERB_WS_URL"
               "--dart-define=REVERB_APP_KEY=$REVERB_APP_KEY"
             )
-          else
-            echo "Reverb belum dikonfigurasi untuk build ini."
           fi
 
-          flutter build apk "${ARGS[@]}"
+          shorebird release android "${ARGS[@]}"
 
-      # ================================
-      # 9. UPLOAD APK ARTIFACT
-      # ================================
-      - name: Upload APK Artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: DahaDigitalKreasi-APK
-          path: build/app/outputs/flutter-apk/app-release.apk
-          if-no-files-found: error
-
-      # ================================
-      # 10. PUBLIKASIKAN RELEASE
-      # ================================
-      - name: Publish GitHub Release
+      - name: Locate APK
+        id: apk
         shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
         run: |
           APK="build/app/outputs/flutter-apk/app-release.apk"
 
-          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
-            gh release upload "$GITHUB_REF_NAME" "$APK" --clobber
-          else
-            gh release create "$GITHUB_REF_NAME" \
-              "$APK" \
-              --title "DahaDigitalKreasi $GITHUB_REF_NAME" \
-              --generate-notes \
-              --verify-tag
+          if [ ! -f "$APK" ]; then
+            echo "ERROR: APK Shorebird tidak ditemukan."
+            exit 1
           fi
+
+          echo "APK ditemukan: $APK"
+          echo "path=$APK" >> "$GITHUB_OUTPUT"
+
+
+      - name: Upload APK Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: DDK-Shorebird-APK
+          path: ${{ steps.apk.outputs.path }}
+          if-no-files-found: error
+
+      - name: Create Draft GitHub Release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          APK: ${{ steps.apk.outputs.path }}
+        run: |
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            echo "ERROR: Release sudah tersedia."
+            exit 1
+          fi
+
+          gh release create "$GITHUB_REF_NAME" "$APK" \
+            --title "DDK Mobile $GITHUB_REF_NAME - Shorebird OTA" \
+            --generate-notes \
+            --verify-tag \
+            --draft
