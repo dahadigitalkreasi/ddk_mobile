@@ -157,8 +157,14 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "$GITHUB_REF_NAME" \
-            build/app/outputs/flutter-apk/app-release.apk \
-            --title "DahaDigitalKreasi $GITHUB_REF_NAME" \
-            --generate-notes \
-            --verify-tag
+          APK="build/app/outputs/flutter-apk/app-release.apk"
+
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" "$APK" --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" \
+              "$APK" \
+              --title "DahaDigitalKreasi $GITHUB_REF_NAME" \
+              --generate-notes \
+              --verify-tag
+          fi
