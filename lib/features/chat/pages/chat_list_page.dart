@@ -1,8 +1,13 @@
+import 'dart:async';
+
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
 import '../../../core/network/api_client.dart';
+import '../../../core/constants/api_config.dart';
+import 'chat_inbox_reverb_service.dart';
+import 'chat_inbox_refresh_bus.dart';
 import 'chat_detail_page.dart';
 
 /// Halaman daftar klarifikasi Packing <-> CS.
@@ -20,12 +25,33 @@ class ChatListPage extends StatefulWidget {
   State<ChatListPage> createState() => _ChatListPageState();
 }
 
-class _ChatListPageState extends State<ChatListPage> {
+class _ChatListPageState extends State<ChatListPage> with WidgetsBindingObserver {
   static const _storage = FlutterSecureStorage();
 
   final _searchController = TextEditingController();
   final List<Map<String, dynamic>> _chats = [];
 
+  static const _appKey = String.fromEnvironment('REVERB_APP_KEY');
+  static const _wsOverride = String.fromEnvironment('REVERB_WS_URL');
+  ChatInboxReverbService? _inboxReverb;
+  StreamSubscription<Map<String, dynamic>>? _inboxSubscription;
+  StreamSubscription<String>? _inboxStatusSubscription;
+  Timer? _inboxDebounce;
+  Timer? _inboxReconnect;
+  Timer? _refreshTimer;
+
+  String get _apiRoot {
+    final base = ApiConfig.baseUrl.replaceAll(RegExp(r'/$'), '');
+    return base.endsWith('/api') ? base.substring(0, base.length - 4) : base;
+  }
+
+  String get _wsUrl {
+    if (_wsOverride.isNotEmpty) return _wsOverride;
+    final api = Uri.parse(_apiRoot);
+    return Uri(scheme: api.scheme == 'https' ? 'wss' : 'ws',
+      host: api.host, port: 8080).toString().replaceAll(RegExp(r'/$'), '');
+  }
+  String? _role;
   String? _token;
   String? _error;
   String _status = 'semua';
@@ -41,7 +67,14 @@ class _ChatListPageState extends State<ChatListPage> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _initialize();
+    _refreshTimer = Timer.periodic(const Duration(seconds: 20), (_) {
+      // Jangan membebani jaringan saat aplikasi tidak sedang menampilkan halaman.
+      if (!mounted || _token == null || _loading || _loadingMore) return;
+      if (!(ModalRoute.of(context)?.isCurrent ?? true)) return;
+      _loadChats(silent: true);
+    });
   }
 
   static Map<String, dynamic> _asMap(Object? raw) {
@@ -65,15 +98,29 @@ class _ChatListPageState extends State<ChatListPage> {
         'Accept': 'application/json',
       });
 
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed && _token != null && !_loading) {
+      _loadChats(silent: true);
+    }
+  }
+
   Future<void> _initialize() async {
     try {
       final token = await _storage.read(key: 'auth_token');
+      final role = await _storage.read(key: 'user_role');
+      final userIdRaw = await _storage.read(key: 'user_id');
       if (token == null || token.isEmpty) {
         throw Exception('Sesi login tidak ditemukan. Silakan login kembali.');
       }
       if (!mounted) return;
       _token = token;
+      _role = role?.trim().toLowerCase();
       await _loadChats();
+      final userId = int.tryParse(userIdRaw ?? '');
+      if (_appKey.isNotEmpty && userId != null && userId > 0 && mounted) {
+        await _connectInbox(userId, token);
+      }
     } catch (error) {
       if (!mounted) return;
       setState(() {
@@ -83,12 +130,53 @@ class _ChatListPageState extends State<ChatListPage> {
     }
   }
 
-  Future<void> _loadChats({bool loadMore = false}) async {
+  Future<void> _connectInbox(int userId, String token) async {
+    await _inboxSubscription?.cancel();
+    await _inboxStatusSubscription?.cancel();
+    await _inboxReverb?.dispose();
+    final service = ChatInboxReverbService(
+      apiBaseUrl: _apiRoot, wsBaseUrl: _wsUrl, appKey: _appKey,
+      authToken: token, userId: userId,
+    );
+    _inboxReverb = service;
+    _inboxSubscription = service.messages.listen((_) {
+      if (!mounted) return;
+      ChatInboxRefreshBus.notify();
+      _inboxDebounce?.cancel();
+      _inboxDebounce = Timer(const Duration(milliseconds: 350), () {
+        if (mounted) _loadChats(silent: true);
+      });
+    });
+    _inboxStatusSubscription = service.statuses.listen((status) {
+      if (!mounted) return;
+      if (status == 'terhubung') {
+        ChatInboxRefreshBus.notify();
+        _loadChats(silent: true);
+      }
+      if (status == 'terputus' || status.startsWith('error:')) {
+        _inboxReconnect?.cancel();
+        _inboxReconnect = Timer(const Duration(seconds: 8), () {
+          if (mounted) _connectInbox(userId, token);
+        });
+      }
+    });
+    try {
+      await service.connect();
+    } catch (_) {
+      // Polling 20 detik tetap berjalan sebagai fallback.
+      _inboxReconnect?.cancel();
+      _inboxReconnect = Timer(const Duration(seconds: 8), () {
+        if (mounted) _connectInbox(userId, token);
+      });
+    }
+  }
+
+  Future<void> _loadChats({bool loadMore = false, bool silent = false}) async {
     if (_token == null) return;
     if (loadMore) {
       if (_loadingMore || !_hasMore) return;
       setState(() => _loadingMore = true);
-    } else {
+    } else if (!silent) {
       setState(() {
         _loading = true;
         _error = null;
@@ -184,17 +272,21 @@ class _ChatListPageState extends State<ChatListPage> {
     if (mounted) await _loadChats();
   }
 
+  // Database menyimpan status historis berdasarkan pihak terakhir yang mengirim:
+  // dibalas = terakhir CS, menunggu_jawaban = terakhir Packing.
+  // Tulisan berikut menunjukkan tindak lanjut yang relevan bagi pengguna login.
   String _statusLabel(String status) {
-    switch (status) {
-      case 'menunggu_jawaban':
-        return 'Menunggu jawaban';
-      case 'dibalas':
-        return 'Dibalas';
-      case 'selesai':
-        return 'Selesai';
-      default:
-        return status;
+    if (status == 'selesai') return 'Selesai';
+    if (_role == 'cs') {
+      if (status == 'dibalas') return 'Menunggu Packing';
+      if (status == 'menunggu_jawaban') return 'Perlu dibalas';
+    } else if (_role == 'packing') {
+      if (status == 'dibalas') return 'Perlu dibalas';
+      if (status == 'menunggu_jawaban') return 'Menunggu CS';
     }
+    if (status == 'dibalas') return 'Dibalas';
+    if (status == 'menunggu_jawaban') return 'Menunggu jawaban';
+    return status;
   }
 
   Color _statusColor(BuildContext context, String status) {
@@ -214,6 +306,7 @@ class _ChatListPageState extends State<ChatListPage> {
     final id = _asInt(chat['id']);
     final order = (chat['no_pesanan'] ?? '-').toString();
     final topic = (chat['topik'] ?? 'Klarifikasi pesanan').toString();
+    final isUnassigned = _role == 'packing' && chat['packing_user_id'] == null;
     final status = (chat['status'] ?? '').toString();
     final unread = _asInt(chat['jumlah_belum_dibaca']);
     final cs = _asMap(chat['cs']);
@@ -265,7 +358,15 @@ class _ChatListPageState extends State<ChatListPage> {
                 ],
               ),
               const SizedBox(height: 8),
-              Text(topic, maxLines: 2, overflow: TextOverflow.ellipsis),
+              if (isUnassigned) ...[
+                const Text(
+                  'Belum ditangani Packing · Buka untuk menangani',
+                  style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
+                ),
+                const SizedBox(height: 6),
+              ],
+              if (topic.trim().isNotEmpty && topic != 'Klarifikasi Pesanan')
+                Text(topic, maxLines: 2, overflow: TextOverflow.ellipsis),
               const SizedBox(height: 8),
               Row(
                 children: [
@@ -307,6 +408,13 @@ class _ChatListPageState extends State<ChatListPage> {
   @override
   void dispose() {
     _requestNumber++;
+    WidgetsBinding.instance.removeObserver(this);
+    _refreshTimer?.cancel();
+    _inboxDebounce?.cancel();
+    _inboxReconnect?.cancel();
+    _inboxSubscription?.cancel();
+    _inboxStatusSubscription?.cancel();
+    _inboxReverb?.dispose();
     _searchController.dispose();
     super.dispose();
   }
@@ -377,8 +485,8 @@ class _ChatListPageState extends State<ChatListPage> {
                   ),
                   for (final filter in const [
                     ('semua', 'Semua'),
-                    ('menunggu_jawaban', 'Menunggu'),
-                    ('dibalas', 'Dibalas'),
+                    ('menunggu_jawaban', 'Packing terakhir'),
+                    ('dibalas', 'CS terakhir'),
                     ('selesai', 'Selesai'),
                   ])
                     Padding(

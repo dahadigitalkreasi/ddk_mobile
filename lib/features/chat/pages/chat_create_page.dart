@@ -90,15 +90,23 @@ class _ChatCreatePageState extends State<ChatCreatePage> {
         }),
       );
 
-      final chat = _asMap(_asMap(response.data)['data']);
+      final responseBody = _asMap(response.data);
+      final chat = _asMap(responseBody['data']);
       final chatId = int.tryParse('${chat['id']}');
       if (chatId == null || chatId <= 0) {
         throw Exception('Chat berhasil dikirim tetapi ID percakapan tidak ditemukan.');
       }
 
       if (!mounted) return;
+      // Backend mengembalikan 200 jika chat sudah dibuat oleh akun lain.
+      // Pesan dari formulir tidak dikirim ulang dalam kasus tersebut.
+      final alreadyExists = response.statusCode == 200;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Chat klarifikasi berhasil dibuat.')),
+        SnackBar(
+          content: Text(alreadyExists
+              ? 'Percakapan sudah tersedia. Pesan pada formulir belum dikirim; silakan kirim dari dalam chat.'
+              : 'Chat klarifikasi berhasil dibuat.'),
+        ),
       );
 
       await Navigator.of(context).push(
@@ -126,12 +134,12 @@ class _ChatCreatePageState extends State<ChatCreatePage> {
             padding: const EdgeInsets.all(16),
             children: [
               const Text(
-                'Chat ini hanya untuk bertanya kepada CS pemilik pesanan ketika ada informasi yang perlu diklarifikasi.',
+                'Gunakan chat ini untuk klarifikasi pesanan antara CS Meta dan Packing Meta. Satu pesanan hanya memiliki satu percakapan.',
               ),
               const SizedBox(height: 20),
               TextFormField(
                 controller: _noPesanan,
-                enabled: !_sending,
+                enabled: !_sending && (widget.initialNoPesanan?.trim().isNotEmpty != true),
                 textCapitalization: TextCapitalization.characters,
                 decoration: const InputDecoration(
                   labelText: 'Nomor pesanan *',
@@ -190,13 +198,13 @@ class _ChatCreatePageState extends State<ChatCreatePage> {
                 maxLines: 7,
                 maxLength: 10000,
                 decoration: const InputDecoration(
-                  labelText: 'Pertanyaan pertama *',
-                  hintText: 'Tulis hal yang ingin ditanyakan kepada CS...',
+                  labelText: 'Pesan pertama *',
+                  hintText: 'Tulis pertanyaan atau informasi untuk CS/Packing Meta...',
                   alignLabelWithHint: true,
                   border: OutlineInputBorder(),
                 ),
                 validator: (value) => (value ?? '').trim().isEmpty
-                    ? 'Pertanyaan tidak boleh kosong.'
+                    ? 'Pesan tidak boleh kosong.'
                     : null,
               ),
               if (_error != null) ...[
@@ -213,7 +221,7 @@ class _ChatCreatePageState extends State<ChatCreatePage> {
                         child: CircularProgressIndicator(strokeWidth: 2),
                       )
                     : const Icon(Icons.send_outlined),
-                label: Text(_sending ? 'Mengirim...' : 'Buat Chat & Kirim Pertanyaan'),
+                label: Text(_sending ? 'Mengirim...' : 'Buat Chat & Kirim Pesan'),
               ),
             ],
           ),

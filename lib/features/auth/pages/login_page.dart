@@ -130,6 +130,7 @@ class _LoginPageState extends State<LoginPage> {
 
       final role = user['role']?.toString() ?? '';
       final leader = isLeader(user['leader']);
+      final platform = user['platform']?.toString().trim().toLowerCase();
 
       final dashboard = getDashboard(role, leader);
 
@@ -166,6 +167,17 @@ class _LoginPageState extends State<LoginPage> {
         key: 'user_leader',
         value: leader.toString(),
       );
+
+      // Platform menentukan cakupan data (terutama modul Packing).
+      // Hapus nilai lama bila API tidak memberikan platform yang valid.
+      if (platform == 'meta' || platform == 'marketplace') {
+        await secureStorage.write(
+          key: 'user_platform',
+          value: platform,
+        );
+      } else {
+        await secureStorage.delete(key: 'user_platform');
+      }
 
       if (!mounted) return;
 

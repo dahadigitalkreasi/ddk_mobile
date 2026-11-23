@@ -15,6 +15,7 @@ import 'cs_add_order_page.dart';
 import 'cs_summary_page.dart';
 import '../../profile/pages/profile_page.dart';
 import '../../chat/pages/chat_list_page.dart';
+import '../../chat/pages/chat_inbox_refresh_bus.dart';
 
 class CsShell extends StatefulWidget {
   const CsShell({super.key});
@@ -32,12 +33,14 @@ class _CsShellState extends State<CsShell> with WidgetsBindingObserver {
   bool isLoggingOut = false;
   bool _refreshingUnread = false;
   Timer? _unreadTimer;
+  StreamSubscription<void>? _inboxChanges;
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     _refreshUnread();
+    _inboxChanges = ChatInboxRefreshBus.changes.listen((_) => _refreshUnread());
     _unreadTimer = Timer.periodic(_refreshInterval, (_) => _refreshUnread());
   }
 
@@ -163,6 +166,7 @@ class _CsShellState extends State<CsShell> with WidgetsBindingObserver {
 
   @override
   void dispose() {
+    _inboxChanges?.cancel();
     _unreadTimer?.cancel();
     WidgetsBinding.instance.removeObserver(this);
     super.dispose();

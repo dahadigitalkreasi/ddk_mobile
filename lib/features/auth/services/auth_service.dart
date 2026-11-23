@@ -9,9 +9,7 @@ class AuthService {
   final FlutterSecureStorage _storage =
       const FlutterSecureStorage();
 
-  // ==============================
   // LOGIN
-  // ==============================
   Future<Map<String, dynamic>> login({
     required String username,
     required String password,
@@ -43,10 +41,6 @@ class AuthService {
     }
   }
 
-  // ==============================
-  // CEK TOKEN
-  // GET /api/me
-  // ==============================
   Future<Map<String, dynamic>?> checkToken() async {
     final token = await _storage.read(
       key: 'auth_token',
@@ -83,10 +77,6 @@ class AuthService {
     }
   }
 
-  // ==============================
-  // LOGOUT
-  // POST /api/logout
-  // ==============================
   Future<void> logout() async {
     final token = await _storage.read(
       key: 'auth_token',
@@ -115,15 +105,11 @@ class AuthService {
         return;
       }
 
-      // Jika server tidak terjangkau, jangan
-      // menganggap logout server berhasil.
       throw Exception(_networkError(e));
     }
   }
 
-  // ==============================
   // HAPUS DATA SESI LOKAL
-  // ==============================
   Future<void> clearSession() async {
     for (final key in [
       'auth_token',
@@ -131,14 +117,12 @@ class AuthService {
       'username',
       'user_role',
       'user_leader',
+      'user_platform',
     ]) {
       await _storage.delete(key: key);
     }
   }
 
-  // ==============================
-  // PESAN ERROR KONEKSI
-  // ==============================
   String _networkError(DioException e) {
     if (e.type == DioExceptionType.connectionTimeout ||
         e.type == DioExceptionType.receiveTimeout ||

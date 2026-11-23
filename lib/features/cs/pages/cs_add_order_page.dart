@@ -127,7 +127,7 @@ class _CsAddOrderPageState extends State<CsAddOrderPage> {
     }
   }
 
-  Future<void> _selectCategory(_ProductInput item, int? categoryId) async {
+  Future<void> _selectCategory(_ProductInput item, int? categoryId, {bool forceReload = false}) async {
     setState(() {
       item.categoryId = categoryId;
       item.product = null;
@@ -135,9 +135,13 @@ class _CsAddOrderPageState extends State<CsAddOrderPage> {
       item.variant = null;
       item.hpp = null;
       item.productsError = null;
-      item.loadingProducts = categoryId != null && !_productsByCategory.containsKey(categoryId);
+      item.loadingProducts = categoryId != null &&
+          (forceReload || !_productsByCategory.containsKey(categoryId));
     });
-    if (categoryId == null || _productsByCategory.containsKey(categoryId)) return;
+    if (categoryId == null ||
+        (!forceReload && _productsByCategory.containsKey(categoryId))) {
+      return;
+    }
     try {
       final token = await _bearerToken();
       final response = await ApiClient.dio.get<dynamic>(
@@ -169,12 +173,14 @@ class _CsAddOrderPageState extends State<CsAddOrderPage> {
       if (!mounted) return;
       setState(() {
         _productsByCategory[categoryId] = parsed;
-        if (item.categoryId == categoryId) item.loadingProducts = false;
+        if (products.contains(item) && item.categoryId == categoryId) {
+          item.loadingProducts = false;
+        }
       });
     } catch (error) {
       if (!mounted) return;
       setState(() {
-        if (item.categoryId == categoryId) {
+        if (products.contains(item) && item.categoryId == categoryId) {
           item.loadingProducts = false;
           item.productsError = _apiError(error, 'Gagal memuat produk.');
         }
@@ -700,9 +706,11 @@ class _CsAddOrderPageState extends State<CsAddOrderPage> {
 
     setState(() {
       if (isChat) {
-        chatDate = selected;
+        chatDate = DateTime(selected.year, selected.month, selected.day,
+            chatDate.hour, chatDate.minute, chatDate.second);
       } else {
-        orderDate = selected;
+        orderDate = DateTime(selected.year, selected.month, selected.day,
+            orderDate.hour, orderDate.minute, orderDate.second);
       }
     });
   }
@@ -1446,7 +1454,7 @@ class _CsAddOrderPageState extends State<CsAddOrderPage> {
             Text(item.productsError!, style: const TextStyle(color: Colors.red)),
             TextButton(onPressed: () {
               final id = item.categoryId;
-              if (id != null) _selectCategory(item, id);
+              if (id != null) _selectCategory(item, id, forceReload: true);
             }, child: const Text('Ulangi Produk')),
           ],
           _searchSelector(

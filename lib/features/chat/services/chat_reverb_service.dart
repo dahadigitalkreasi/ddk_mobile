@@ -19,8 +19,8 @@ class ChatReverbService {
     required this.authToken,
     required this.chatId,
     Dio? dio,
-  })  : assert(chatId > 0),
-        _dio = dio ?? Dio();
+  }) : assert(chatId > 0),
+       _dio = dio ?? Dio();
 
   final String apiBaseUrl;
   final String wsBaseUrl;
@@ -38,7 +38,6 @@ class ChatReverbService {
 
   Stream<Map<String, dynamic>> get messages => _messages.stream;
   Stream<String> get statuses => _statuses.stream;
-  /// Event chat.pesan.dibaca; diproses oleh halaman detail pada langkah berikutnya.
   Stream<Map<String, dynamic>> get readReceipts => _readReceipts.stream;
 
   String get channelName => 'private-packing-chat.$chatId';
@@ -66,7 +65,8 @@ class ChatReverbService {
     }
 
     final uri = base.replace(
-      path: '${base.path.replaceAll(RegExp(r'/$'), '')}/app/${Uri.encodeComponent(appKey)}',
+      path:
+          '${base.path.replaceAll(RegExp(r'/$'), '')}/app/${Uri.encodeComponent(appKey)}',
       queryParameters: {
         'protocol': '7',
         'client': 'flutter',
@@ -162,10 +162,7 @@ class ChatReverbService {
     try {
       final response = await _dio.post<dynamic>(
         '${apiBaseUrl.replaceAll(RegExp(r'/$'), '')}/api/broadcasting/auth',
-        data: {
-          'socket_id': socketId,
-          'channel_name': channelName,
-        },
+        data: {'socket_id': socketId, 'channel_name': channelName},
         options: Options(
           contentType: Headers.formUrlEncodedContentType,
           headers: {
@@ -184,10 +181,7 @@ class ChatReverbService {
       }
       _send({
         'event': 'pusher:subscribe',
-        'data': {
-          'auth': authorization,
-          'channel': channelName,
-        },
+        'data': {'auth': authorization, 'channel': channelName},
       });
     } catch (error) {
       if (generation == _generation) {

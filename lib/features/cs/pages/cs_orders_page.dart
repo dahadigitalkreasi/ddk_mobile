@@ -8,20 +8,29 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import '../../../app/app_theme.dart';
 import '../../../core/network/api_client.dart';
 import '../../orders/services/cs_order_updates.dart';
+import '../../chat/pages/chat_order_launcher.dart';
 
 class CsOrdersPage extends StatefulWidget {
   final VoidCallback onAddOrder;
+  final bool isActive;
 
-  const CsOrdersPage({super.key, required this.onAddOrder});
+  const CsOrdersPage({
+    super.key,
+    required this.onAddOrder,
+    this.isActive = true,
+  });
 
   @override
   State<CsOrdersPage> createState() => _CsOrdersPageState();
 }
 
-class _CsOrdersPageState extends State<CsOrdersPage> {
+class _CsOrdersPageState extends State<CsOrdersPage>
+    with WidgetsBindingObserver {
   final searchController = TextEditingController();
   final _storage = const FlutterSecureStorage();
   Timer? _searchTimer;
+  Timer? _refreshTimer;
+  bool _appResumed = true;
   String selectedStatus = 'semua';
   List<_CsOrder> orders = [];
   bool loading = true;
@@ -42,8 +51,36 @@ class _CsOrdersPageState extends State<CsOrdersPage> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _loadOrders();
     CsOrderUpdates.version.addListener(_onOrderCreated);
+    _startRefreshTimer();
+  }
+
+  void _startRefreshTimer() {
+    _refreshTimer?.cancel();
+    _refreshTimer = Timer.periodic(const Duration(seconds: 30), (_) {
+      if (mounted && widget.isActive && _appResumed && !loading) {
+        _loadOrders(silent: true);
+      }
+    });
+  }
+
+  @override
+  void didUpdateWidget(covariant CsOrdersPage oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (!oldWidget.isActive && widget.isActive) {
+      _loadOrders(silent: true);
+    }
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    final resumed = state == AppLifecycleState.resumed;
+    _appResumed = resumed;
+    if (resumed && widget.isActive) {
+      _loadOrders(silent: true);
+    }
   }
 
   void _onOrderCreated() {
@@ -53,6 +90,8 @@ class _CsOrdersPageState extends State<CsOrdersPage> {
   @override
   void dispose() {
     _searchTimer?.cancel();
+    _refreshTimer?.cancel();
+    WidgetsBinding.instance.removeObserver(this);
     CsOrderUpdates.version.removeListener(_onOrderCreated);
     searchController.dispose();
     super.dispose();
@@ -66,9 +105,14 @@ class _CsOrdersPageState extends State<CsOrdersPage> {
     return token;
   }
 
-  Future<void> _loadOrders() async {
+  Future<void> _loadOrders({bool silent = false}) async {
     final currentRequest = ++_requestId;
-    if (mounted) setState(() { loading = true; error = null; });
+    if (mounted) {
+      setState(() {
+        if (!silent) loading = true;
+        error = null;
+      });
+    }
 
     try {
       final token = await _token();
@@ -93,7 +137,11 @@ class _CsOrdersPageState extends State<CsOrdersPage> {
       setState(() { orders = parsed; loading = false; });
     } catch (e) {
       if (!mounted || currentRequest != _requestId) return;
-      setState(() { loading = false; error = _errorMessage(e); });
+      setState(() {
+        loading = false;
+        orders = [];
+        error = _errorMessage(e);
+      });
     }
   }
 
@@ -419,6 +467,7 @@ class _OrderDetailSheetState extends State<_OrderDetailSheet> {
     ].where((item) => item.trim().isNotEmpty).toList();
     final kodePos = _asText(alamat['kodePos']);
     final alamatLengkap = [
+      _asText(alamat['alamatLengkap']),
       ...bagianAlamat,
       if (kodePos.isNotEmpty) kodePos,
     ].join(', ');
@@ -547,12 +596,31 @@ class _OrderDetailSheetState extends State<_OrderDetailSheet> {
             ],
           )),
           Padding(
-            padding: const EdgeInsets.fromLTRB(20, 8, 20, 12),
-            child: SizedBox(width: double.infinity, child: FilledButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text('Tutup Detail'),
-            )),
+          padding: const EdgeInsets.fromLTRB(20, 8, 20, 12),
+          child: Column(
+            children: [
+              SizedBox(
+                width: double.infinity,
+                child: FilledButton.icon(
+                  onPressed: () => ChatOrderLauncher.open(
+                    context,
+                    noPesanan: order.number,
+                  ),
+                  icon: const Icon(Icons.chat_bubble_outline),
+                  label: const Text('Chat Klarifikasi'),
+                ),
+              ),
+              const SizedBox(height: 8),
+              SizedBox(
+                width: double.infinity,
+                child: OutlinedButton(
+                  onPressed: () => Navigator.pop(context),
+                  child: const Text('Tutup Detail'),
+                ),
+              ),
+            ],
           ),
+        ),
         ]),
       ),
     );

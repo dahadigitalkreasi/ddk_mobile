@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
@@ -8,15 +10,24 @@ import '../../orders/services/cs_order_updates.dart';
 
 class CsDashboardPage extends StatefulWidget {
   final VoidCallback onOpenOrders;
+  final bool isActive;
 
-  const CsDashboardPage({super.key, required this.onOpenOrders});
+  const CsDashboardPage({
+    super.key,
+    required this.onOpenOrders,
+    this.isActive = true,
+  });
 
   @override
   State<CsDashboardPage> createState() => _CsDashboardPageState();
 }
 
-class _CsDashboardPageState extends State<CsDashboardPage> {
+class _CsDashboardPageState extends State<CsDashboardPage>
+    with WidgetsBindingObserver {
   static const _storage = FlutterSecureStorage();
+  static const _refreshInterval = Duration(seconds: 30);
+  Timer? _refreshTimer;
+  bool _appResumed = true;
 
   bool _loading = true;
   bool _refreshing = false;
@@ -29,16 +40,45 @@ class _CsDashboardPageState extends State<CsDashboardPage> {
   @override
   void initState() {
     super.initState();
-    _loadData();
+    WidgetsBinding.instance.addObserver(this);
     CsOrderUpdates.version.addListener(_onOrderCreated);
+    if (widget.isActive) {
+      _loadData();
+    }
+    _refreshTimer = Timer.periodic(_refreshInterval, (_) {
+      if (widget.isActive && _appResumed) {
+        _loadData();
+      }
+    });
+  }
+
+  @override
+  void didUpdateWidget(covariant CsDashboardPage oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (!oldWidget.isActive && widget.isActive && _appResumed) {
+      _loadData();
+    }
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    final wasResumed = _appResumed;
+    _appResumed = state == AppLifecycleState.resumed;
+    if (!wasResumed && _appResumed && widget.isActive) {
+      _loadData();
+    }
   }
 
   void _onOrderCreated() {
-    if (mounted) _loadData();
+    if (mounted) {
+      _loadData();
+    }
   }
 
   @override
   void dispose() {
+    _refreshTimer?.cancel();
+    WidgetsBinding.instance.removeObserver(this);
     CsOrderUpdates.version.removeListener(_onOrderCreated);
     super.dispose();
   }
