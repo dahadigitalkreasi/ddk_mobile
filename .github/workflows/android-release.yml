@@ -1,4 +1,3 @@
-
 name: DahaDigitalKreasi Android Release
 
 on:
@@ -71,28 +70,28 @@ jobs:
       - name: Restore Android Signing
         shell: bash
         env:
-          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
-          STORE_PASSWORD: ${{ secrets.STORE_PASSWORD }}
-          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
-          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          STORE_PASSWORD: ${{ secrets.ANDROID_STORE_PASSWORD }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
         run: |
           test -n "$KEYSTORE_BASE64" || {
-            echo "ERROR: KEYSTORE_BASE64 belum tersedia"
+            echo "ERROR: ANDROID_KEYSTORE_BASE64 belum tersedia"
             exit 1
           }
 
           test -n "$STORE_PASSWORD" || {
-            echo "ERROR: STORE_PASSWORD belum tersedia"
+            echo "ERROR: ANDROID_STORE_PASSWORD belum tersedia"
             exit 1
           }
 
           test -n "$KEY_PASSWORD" || {
-            echo "ERROR: KEY_PASSWORD belum tersedia"
+            echo "ERROR: ANDROID_KEY_PASSWORD belum tersedia"
             exit 1
           }
 
           test -n "$KEY_ALIAS" || {
-            echo "ERROR: KEY_ALIAS belum tersedia"
+            echo "ERROR: ANDROID_KEY_ALIAS belum tersedia"
             exit 1
           }
 
@@ -115,7 +114,7 @@ jobs:
         run: flutter analyze
 
       # ================================
-      # 8. BUILD APK
+      # 8. BUILD APK KE DOMAIN VPS
       # ================================
       - name: Build Android APK
         shell: bash
