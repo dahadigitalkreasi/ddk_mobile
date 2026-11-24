@@ -1,0 +1,88 @@
+name: DDK Mobile Shorebird Patch Test
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: shorebird-patch
+  cancel-in-progress: false
+
+jobs:
+  patch:
+    name: Test Patch Android
+    runs-on: ubuntu-latest
+
+    env:
+      SHOREBIRD_TOKEN: ${{ secrets.SHOREBIRD_TOKEN }}
+      REVERB_WS_URL: ${{ vars.REVERB_WS_URL }}
+      REVERB_APP_KEY: ${{ secrets.REVERB_APP_KEY }}
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Verify Version
+        shell: bash
+        run: |
+          test "$GITHUB_REF_NAME" = "master" || exit 1
+          grep -q '^version: 1.0.9+10$' pubspec.yaml
+          test -n "$SHOREBIRD_TOKEN"
+          test -n "$REVERB_WS_URL"
+          test -n "$REVERB_APP_KEY"
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.47.9'
+          channel: stable
+          cache: true
+
+      - name: Setup Shorebird
+        uses: shorebirdtech/setup-shorebird@v1
+
+      - name: Restore Android Signing
+        shell: bash
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          STORE_PASSWORD: ${{ secrets.ANDROID_STORE_PASSWORD }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+        run: |
+          for VAR in KEYSTORE_BASE64 STORE_PASSWORD KEY_PASSWORD KEY_ALIAS; do
+            test -n "${!VAR}" || exit 1
+          done
+
+          printf '%s' "$KEYSTORE_BASE64" | base64 --decode \
+            > android/app/upload-keystore.jks
+
+          {
+            echo "storePassword=$STORE_PASSWORD"
+            echo "keyPassword=$KEY_PASSWORD"
+            echo "keyAlias=$KEY_ALIAS"
+            echo "storeFile=upload-keystore.jks"
+          } > android/key.properties
+
+      - name: Install Dependencies
+        run: flutter pub get
+
+      - name: Analyze Flutter
+        run: flutter analyze
+
+      - name: Test Shorebird Patch
+        shell: bash
+        run: |
+          shorebird patch android \
+            --release-version=1.0.9+10 \
+            --dry-run \
+            --dart-define="API_BASE_URL=https://sandbox.dahakreasidigital.my.id/api" \
+            --dart-define="REVERB_WS_URL=$REVERB_WS_URL" \
+            --dart-define="REVERB_APP_KEY=$REVERB_APP_KEY"
