@@ -25,7 +25,8 @@ class ChatListPage extends StatefulWidget {
   State<ChatListPage> createState() => _ChatListPageState();
 }
 
-class _ChatListPageState extends State<ChatListPage> with WidgetsBindingObserver {
+class _ChatListPageState extends State<ChatListPage>
+    with WidgetsBindingObserver {
   static const _storage = FlutterSecureStorage();
 
   final _searchController = TextEditingController();
@@ -48,9 +49,13 @@ class _ChatListPageState extends State<ChatListPage> with WidgetsBindingObserver
   String get _wsUrl {
     if (_wsOverride.isNotEmpty) return _wsOverride;
     final api = Uri.parse(_apiRoot);
-    return Uri(scheme: api.scheme == 'https' ? 'wss' : 'ws',
-      host: api.host, port: 8080).toString().replaceAll(RegExp(r'/$'), '');
+    return Uri(
+      scheme: api.scheme == 'https' ? 'wss' : 'ws',
+      host: api.host,
+      port: 8080,
+    ).toString().replaceAll(RegExp(r'/$'), '');
   }
+
   String? _role;
   String? _token;
   String? _error;
@@ -93,10 +98,9 @@ class _ChatListPageState extends State<ChatListPage> with WidgetsBindingObserver
     return error.toString().replaceFirst('Exception: ', '');
   }
 
-  Options get _authOptions => Options(headers: {
-        'Authorization': 'Bearer $_token',
-        'Accept': 'application/json',
-      });
+  Options get _authOptions => Options(
+    headers: {'Authorization': 'Bearer $_token', 'Accept': 'application/json'},
+  );
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
@@ -135,8 +139,11 @@ class _ChatListPageState extends State<ChatListPage> with WidgetsBindingObserver
     await _inboxStatusSubscription?.cancel();
     await _inboxReverb?.dispose();
     final service = ChatInboxReverbService(
-      apiBaseUrl: _apiRoot, wsBaseUrl: _wsUrl, appKey: _appKey,
-      authToken: token, userId: userId,
+      apiBaseUrl: _apiRoot,
+      wsBaseUrl: _wsUrl,
+      appKey: _appKey,
+      authToken: token,
+      userId: userId,
     );
     _inboxReverb = service;
     _inboxSubscription = service.messages.listen((_) {
@@ -153,7 +160,9 @@ class _ChatListPageState extends State<ChatListPage> with WidgetsBindingObserver
         ChatInboxRefreshBus.notify();
         _loadChats(silent: true);
       }
-      if (status == 'terputus' || status.startsWith('error:')) {
+      if (status == 'terputus' ||
+          status.startsWith('error') ||
+          status.startsWith('gagal')) {
         _inboxReconnect?.cancel();
         _inboxReconnect = Timer(const Duration(seconds: 8), () {
           if (mounted) _connectInbox(userId, token);
@@ -265,9 +274,7 @@ class _ChatListPageState extends State<ChatListPage> with WidgetsBindingObserver
   Future<void> _openChat(int chatId) async {
     if (chatId <= 0) return;
     await Navigator.of(context).push(
-      MaterialPageRoute<void>(
-        builder: (_) => ChatDetailPage(chatId: chatId),
-      ),
+      MaterialPageRoute<void>(builder: (_) => ChatDetailPage(chatId: chatId)),
     );
     if (mounted) await _loadChats();
   }
@@ -340,7 +347,8 @@ class _ChatListPageState extends State<ChatListPage> with WidgetsBindingObserver
                   if (unread > 0)
                     Container(
                       padding: const EdgeInsets.symmetric(
-                        horizontal: 8, vertical: 3,
+                        horizontal: 8,
+                        vertical: 3,
                       ),
                       decoration: BoxDecoration(
                         color: Colors.red.shade700,
@@ -370,7 +378,11 @@ class _ChatListPageState extends State<ChatListPage> with WidgetsBindingObserver
               const SizedBox(height: 8),
               Row(
                 children: [
-                  Icon(Icons.circle, size: 9, color: _statusColor(context, status)),
+                  Icon(
+                    Icons.circle,
+                    size: 9,
+                    color: _statusColor(context, status),
+                  ),
                   const SizedBox(width: 6),
                   Expanded(
                     child: Text(
@@ -478,7 +490,10 @@ class _ChatListPageState extends State<ChatListPage> with WidgetsBindingObserver
                     padding: const EdgeInsets.only(right: 8),
                     child: FilterChip(
                       label: const Text('Belum Dibaca'),
-                      avatar: const Icon(Icons.mark_chat_unread_outlined, size: 18),
+                      avatar: const Icon(
+                        Icons.mark_chat_unread_outlined,
+                        size: 18,
+                      ),
                       selected: _unreadOnly,
                       onSelected: (_) => _toggleUnreadOnly(),
                     ),
@@ -537,9 +552,11 @@ class _ChatListPageState extends State<ChatListPage> with WidgetsBindingObserver
                                   onPressed: _loadingMore
                                       ? null
                                       : () => _loadChats(loadMore: true),
-                                  child: Text(_loadingMore
-                                      ? 'Memuat...'
-                                      : 'Muat chat lainnya'),
+                                  child: Text(
+                                    _loadingMore
+                                        ? 'Memuat...'
+                                        : 'Muat chat lainnya',
+                                  ),
                                 ),
                               ),
                             ),
