@@ -80,9 +80,11 @@ class ChatReverbService {
     );
   }
 
-  void _log(String message, {Object? error, StackTrace? stackTrace}) {
-    if (!kDebugMode) return;
-
+  void _log(
+    String message, {
+    Object? error,
+    StackTrace? stackTrace,
+  }) {
     debugPrint('[ChatReverb] $message');
 
     if (error != null) {
@@ -90,7 +92,7 @@ class ChatReverbService {
       debugPrint('[ChatReverb] ERROR TYPE: ${error.runtimeType}');
     }
 
-    if (stackTrace != null) {
+    if (stackTrace != null && kDebugMode) {
       debugPrintStack(
         label: '[ChatReverb] STACK TRACE',
         stackTrace: stackTrace,

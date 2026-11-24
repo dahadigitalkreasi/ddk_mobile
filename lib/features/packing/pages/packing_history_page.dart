@@ -6,6 +6,7 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
 import '../../../app/app_theme.dart';
 import '../../../core/network/api_client.dart';
+import '../../../core/events/packing_history_updates.dart';
 
 class PackingHistoryPage extends StatefulWidget {
   const PackingHistoryPage({super.key});
@@ -27,6 +28,13 @@ class _PackingHistoryPageState extends State<PackingHistoryPage>
   String? _error;
   bool _loading = true;
   int _requestSequence = 0;
+  int _activeRequests = 0;
+
+  void _onPackingScanComplete() {
+    if (mounted && _token != null) {
+      _loadHistory(silent: true);
+    }
+  }
   String _selectedChannel = 'SEMUA';
   DateTime? _selectedDate;
 
@@ -71,11 +79,13 @@ class _PackingHistoryPageState extends State<PackingHistoryPage>
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    packingHistoryUpdates.addListener(_onPackingScanComplete);
     _initialize();
-    _refreshTimer = Timer.periodic(const Duration(seconds: 30), (_) {
-      if (mounted && !_loading && _token != null &&
+    // Cadangan untuk scan dari HP/perangkat lain. Tidak perlu refresh manual.
+    _refreshTimer = Timer.periodic(const Duration(seconds: 5), (_) {
+      if (mounted && !_loading && _activeRequests == 0 && _token != null &&
           WidgetsBinding.instance.lifecycleState == AppLifecycleState.resumed) {
-        _loadHistory(silent: true);
+        _loadHistory(silent: true, background: true);
       }
     });
   }
@@ -107,9 +117,10 @@ class _PackingHistoryPageState extends State<PackingHistoryPage>
     }
   }
 
-  Future<void> _loadHistory({bool silent = false}) async {
-    if (_token == null) return;
+  Future<void> _loadHistory({bool silent = false, bool background = false}) async {
+    if (_token == null || (background && _activeRequests > 0)) return;
     final requestId = ++_requestSequence;
+    _activeRequests++;
     if (!silent) {
       setState(() {
         _loading = true;
@@ -147,12 +158,17 @@ class _PackingHistoryPageState extends State<PackingHistoryPage>
       });
     } catch (error) {
       if (!mounted || requestId != _requestSequence) return;
-      setState(() {
-        _orders.clear();
-        _error = _apiError(error);
-      });
+      // Hindari menghilangkan daftar yang sudah tampil karena gagal refresh
+      // jaringan sesaat. Error tetap terlihat pada pencarian manual.
+      if (!background) {
+        setState(() {
+          if (!silent) _orders.clear();
+          _error = _apiError(error);
+        });
+      }
     } finally {
-      if (mounted && requestId == _requestSequence) {
+      _activeRequests--;
+      if (mounted && requestId == _requestSequence && !silent) {
         setState(() => _loading = false);
       }
     }
@@ -360,6 +376,7 @@ class _PackingHistoryPageState extends State<PackingHistoryPage>
     _searchTimer?.cancel();
     _refreshTimer?.cancel();
     WidgetsBinding.instance.removeObserver(this);
+    packingHistoryUpdates.removeListener(_onPackingScanComplete);
     _searchController.dispose();
     super.dispose();
   }

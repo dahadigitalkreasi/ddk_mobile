@@ -7,12 +7,9 @@ import 'package:mobile_scanner/mobile_scanner.dart';
 
 import '../../../app/app_theme.dart';
 import '../../../core/network/api_client.dart';
+import '../../../core/events/packing_history_updates.dart';
 import '../../chat/pages/chat_order_launcher.dart';
 
-/// API:
-/// GET   /api/packing/antrian/ready
-/// GET   /api/packing/scan/{no_resi}
-/// PATCH /api/packing/scan/update/{no_pesanan}
 class PackingScanPage extends StatefulWidget {
   const PackingScanPage({super.key});
 
@@ -25,15 +22,20 @@ class _PackingScanPageState extends State<PackingScanPage>
   static const _storage = FlutterSecureStorage();
   final resiController = TextEditingController();
   final List<Map<String, dynamic>> _readyOrders = [];
+  final MobileScannerController _scannerController = MobileScannerController(
+    detectionSpeed: DetectionSpeed.normal,
+    detectionTimeoutMs: 900,
+  );
+  String? _lastDetectedResi;
+  DateTime? _lastDetectedAt;
+  bool _scanBusy = false;
 
   Timer? _refreshTimer;
   String? _token;
   String? _platform;
   String? _readyError;
-  String? lastSuccessResi;
   bool _loadingReady = true;
   bool processing = false;
-  bool _cameraOpen = false;
   int _loadSequence = 0;
 
   static Map<String, dynamic> _map(Object? value) =>
@@ -49,6 +51,12 @@ class _PackingScanPageState extends State<PackingScanPage>
       final body = _map(error.response?.data);
       final message = body['message']?.toString();
       if (message != null && message.trim().isNotEmpty) return message;
+      final errors = body['errors'];
+      if (errors is Map && errors.isNotEmpty) {
+        final first = errors.values.first;
+        if (first is List && first.isNotEmpty) return first.first.toString();
+        if (first != null) return first.toString();
+      }
       switch (error.response?.statusCode) {
         case 401:
           return 'Sesi login berakhir. Silakan masuk kembali.';
@@ -156,10 +164,22 @@ class _PackingScanPageState extends State<PackingScanPage>
     }
   }
 
-  void message(String value) {
+  void message(String value, {bool isError = false}) {
     if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(value), behavior: SnackBarBehavior.floating),
+    final messenger = ScaffoldMessenger.of(context);
+    messenger.hideCurrentSnackBar();
+    messenger.showSnackBar(
+      SnackBar(
+        content: Row(children: [
+          Icon(isError ? Icons.error_outline : Icons.check_circle_outline,
+              color: Colors.white),
+          const SizedBox(width: 10),
+          Expanded(child: Text(value)),
+        ]),
+        backgroundColor: isError ? const Color(0xFFB42318) : const Color(0xFF0B8B65),
+        duration: const Duration(seconds: 4),
+        behavior: SnackBarBehavior.floating,
+      ),
     );
   }
 
@@ -167,11 +187,11 @@ class _PackingScanPageState extends State<PackingScanPage>
     if (processing) return;
     final resi = (scannedValue ?? resiController.text).trim().toUpperCase();
     if (resi.isEmpty) {
-      message('Nomor resi wajib diisi.');
+      message('Nomor resi wajib diisi.', isError: true);
       return;
     }
     if (_token == null) {
-      message('Sesi login belum tersedia. Buka kembali halaman ini.');
+      message('Sesi login belum tersedia. Buka kembali halaman ini.', isError: true);
       return;
     }
 
@@ -192,7 +212,7 @@ class _PackingScanPageState extends State<PackingScanPage>
       }
       if (_platform == 'marketplace' &&
           _text(order['platform']).toLowerCase() == 'meta') {
-        message('Akun Packing Marketplace tidak dapat memproses pesanan Meta.');
+        message('Akun Packing Marketplace tidak dapat memproses pesanan Meta.', isError: true);
         return;
       }
       if (!mounted) return;
@@ -247,34 +267,88 @@ class _PackingScanPageState extends State<PackingScanPage>
         throw Exception('Server belum mengonfirmasi status dikirim.');
       }
       if (!mounted) return;
-      setState(() {
-        lastSuccessResi = resi;
-        resiController.clear();
-      });
+      resiController.clear();
+      // Perbarui Riwayat Pengiriman langsung, tanpa tombol refresh.
+      notifyPackingHistoryUpdated();
       message('Resi $resi berhasil diproses sebagai Dikirim.');
       await _loadReady(silent: true);
     } catch (error) {
-      message(_errorMessage(error));
+      message(_errorMessage(error), isError: true);
     } finally {
       if (mounted) setState(() => processing = false);
     }
   }
 
-  Future<void> openCameraScanner() async {
-    if (processing || _cameraOpen) return;
-    _cameraOpen = true;
-    try {
-      final scannedValue = await Navigator.push<String>(
-        context,
-        MaterialPageRoute(builder: (_) => const PackingCameraScannerPage()),
+  // Kamera tetap berada di halaman. Satu barcode hanya memicu satu
+  // permintaan pada satu waktu, termasuk selama dialog konfirmasi terbuka.
+  Future<void> _onCameraDetect(BarcodeCapture capture) async {
+    if (!mounted || processing || _scanBusy || _token == null) return;
+
+    for (final barcode in capture.barcodes) {
+      final resi = barcode.rawValue?.trim().toUpperCase();
+      if (resi == null || resi.isEmpty) continue;
+
+      final now = DateTime.now();
+      // Mode normal membuat kode sama dapat dipindai ulang.
+      // Cooldown hanya mencegah permintaan beruntun saat kamera masih
+      // mengarah ke barcode, bukan memblokir barcode selamanya.
+      if (resi == _lastDetectedResi &&
+          _lastDetectedAt != null &&
+          now.difference(_lastDetectedAt!) < const Duration(seconds: 5)) {
+        return;
+      }
+
+      _scanBusy = true;
+      _lastDetectedResi = resi;
+      _lastDetectedAt = now;
+      resiController.value = TextEditingValue(
+        text: resi,
+        selection: TextSelection.collapsed(offset: resi.length),
       );
-      if (!mounted || scannedValue == null) return;
-      final resi = scannedValue.trim().toUpperCase();
-      resiController.text = resi;
-      await processResi(resi);
-    } finally {
-      _cameraOpen = false;
+
+      try {
+        // Scanner otomatis mencari pesanan tanpa menekan tombol.
+        await processResi(resi);
+      } finally {
+        _scanBusy = false;
+      }
+      return;
     }
+  }
+
+  Widget _liveCamera() {
+    return Container(
+      margin: const EdgeInsets.fromLTRB(15, 14, 15, 0),
+      clipBehavior: Clip.antiAlias,
+      decoration: BoxDecoration(
+        color: Colors.black,
+        borderRadius: BorderRadius.circular(16),
+      ),
+      child: SizedBox(
+        height: 205,
+        child: Stack(
+          fit: StackFit.expand,
+          children: [
+            MobileScanner(
+              controller: _scannerController,
+              onDetect: _onCameraDetect,
+            ),
+            Center(
+              child: IgnorePointer(
+                child: Container(
+                  width: 245,
+                  height: 110,
+                  decoration: BoxDecoration(
+                    border: Border.all(color: Colors.white, width: 2.5),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 
   static Widget detailLine(String label, String value) {
@@ -421,6 +495,7 @@ class _PackingScanPageState extends State<PackingScanPage>
     _refreshTimer?.cancel();
     _loadSequence++;
     resiController.dispose();
+    _scannerController.dispose();
     super.dispose();
   }
 
@@ -452,6 +527,8 @@ class _PackingScanPageState extends State<PackingScanPage>
               ],
             ),
           ),
+          // Kamera selalu tampil dan langsung aktif saat halaman dibuka.
+          _liveCamera(),
           Expanded(
             child: RefreshIndicator(
               onRefresh: () => _loadReady(),
@@ -459,54 +536,8 @@ class _PackingScanPageState extends State<PackingScanPage>
                 physics: const AlwaysScrollableScrollPhysics(),
                 padding: const EdgeInsets.all(15),
                 children: [
-                  SizedBox(
-                    width: double.infinity,
-                    child: FilledButton(
-                      onPressed: processing ? null : openCameraScanner,
-                      style: FilledButton.styleFrom(
-                        padding: const EdgeInsets.symmetric(vertical: 20),
-                        backgroundColor: AppTheme.primary,
-                        foregroundColor: Colors.white,
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(16),
-                        ),
-                      ),
-                      child: const Column(
-                        children: [
-                          Icon(Icons.qr_code_scanner, size: 38),
-                          SizedBox(height: 8),
-                          Text('Scan Barcode Resi',
-                              style: TextStyle(fontSize: 17,
-                                  fontWeight: FontWeight.bold)),
-                          SizedBox(height: 4),
-                          Text('Buka kamera untuk scan paket',
-                              style: TextStyle(fontSize: 12)),
-                        ],
-                      ),
-                    ),
-                  ),
-                  const SizedBox(height: 15),
-                  Container(
-                    padding: const EdgeInsets.all(13),
-                    decoration: BoxDecoration(
-                      color: const Color(0xFFEAF4FD),
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                    child: const Row(children: [
-                      Icon(Icons.info_outline, color: AppTheme.primary),
-                      SizedBox(width: 10),
-                      Expanded(
-                        child: Text(
-                          'Scan resi Meta, Shopee, atau TikTok sesuai akses akun. '
-                          'Pastikan paket sudah selesai dipacking.',
-                          style: TextStyle(fontSize: 12, color: AppTheme.navy),
-                        ),
-                      ),
-                    ]),
-                  ),
-                  const SizedBox(height: 15),
                   panel(
-                    'Masukkan Resi Manual',
+                    'Nomor Resi (Scan / Manual)',
                     Column(
                       crossAxisAlignment: CrossAxisAlignment.stretch,
                       children: [
@@ -514,10 +545,9 @@ class _PackingScanPageState extends State<PackingScanPage>
                           controller: resiController,
                           textCapitalization: TextCapitalization.characters,
                           textInputAction: TextInputAction.done,
-                          onSubmitted: (_) => processResi(),
                           decoration: const InputDecoration(
                             labelText: 'Nomor Resi',
-                            hintText: 'Scan barcode atau ketik resi',
+                            hintText: 'Otomatis terisi saat scan atau ketik manual',
                             prefixIcon: Icon(Icons.qr_code_scanner),
                           ),
                         ),
@@ -527,38 +557,9 @@ class _PackingScanPageState extends State<PackingScanPage>
                           icon: const Icon(Icons.search),
                           label: Text(processing ? 'Mencari...' : 'Cari Pesanan'),
                         ),
-                        const SizedBox(height: 10),
-                        const Text(
-                          'Scanner barcode fisik dapat mengetik nomor resi pada '
-                          'kolom di atas. Tekan Enter untuk memproses.',
-                          style: TextStyle(
-                              fontSize: 11,
-                              color: Colors.black54,
-                              height: 1.5),
-                        ),
                       ],
                     ),
                   ),
-                  if (lastSuccessResi != null)
-                    Container(
-                      margin: const EdgeInsets.only(bottom: 15),
-                      padding: const EdgeInsets.all(14),
-                      decoration: BoxDecoration(
-                        color: const Color(0xFFEAF7F0),
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                      child: Row(children: [
-                        const Icon(Icons.check_circle, color: Color(0xFF0B8B65)),
-                        const SizedBox(width: 10),
-                        Expanded(
-                          child: Text('Resi $lastSuccessResi berhasil dikirim.',
-                              style: const TextStyle(
-                                  color: Color(0xFF0B8B65),
-                                  fontSize: 12,
-                                  fontWeight: FontWeight.w600)),
-                        ),
-                      ]),
-                    ),
                   Row(children: [
                     const Expanded(
                       child: Text('Antrean Siap Dikirim',
@@ -609,102 +610,12 @@ class _PackingScanPageState extends State<PackingScanPage>
                     )
                   else
                     for (final order in _readyOrders) readyOrderCard(order),
-                  const SizedBox(height: 12),
-                  Container(
-                    padding: const EdgeInsets.all(13),
-                    decoration: BoxDecoration(
-                      color: const Color(0xFFFFF4E6),
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                    child: const Text(
-                      'Pencarian resi tidak mengubah status pesanan. '
-                      'Status berubah setelah menekan Ya, Kirim.',
-                      style: TextStyle(
-                          color: Color(0xFF8D570F), fontSize: 11, height: 1.5),
-                    ),
-                  ),
                   const SizedBox(height: 25),
                 ],
               ),
             ),
           ),
         ],
-      ),
-    );
-  }
-}
-
-class PackingCameraScannerPage extends StatefulWidget {
-  const PackingCameraScannerPage({super.key});
-
-  @override
-  State<PackingCameraScannerPage> createState() =>
-      _PackingCameraScannerPageState();
-}
-
-class _PackingCameraScannerPageState extends State<PackingCameraScannerPage> {
-  final MobileScannerController scannerController = MobileScannerController(
-    detectionSpeed: DetectionSpeed.noDuplicates,
-  );
-  bool detected = false;
-
-  void onDetect(BarcodeCapture capture) {
-    if (detected || !mounted) return;
-    for (final barcode in capture.barcodes) {
-      final value = barcode.rawValue?.trim();
-      if (value == null || value.isEmpty) continue;
-      detected = true;
-      Navigator.pop(context, value);
-      return;
-    }
-  }
-
-  @override
-  void dispose() {
-    scannerController.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: Colors.black,
-      appBar: AppBar(
-        title: const Text('Scan Barcode Resi'),
-        backgroundColor: AppTheme.navy,
-        foregroundColor: Colors.white,
-      ),
-      body: SafeArea(
-        child: Stack(children: [
-          MobileScanner(controller: scannerController, onDetect: onDetect),
-          Align(
-            alignment: Alignment.center,
-            child: IgnorePointer(
-              child: Container(
-                width: 280,
-                height: 180,
-                decoration: BoxDecoration(
-                  border: Border.all(color: Colors.white, width: 3),
-                  borderRadius: BorderRadius.circular(15),
-                ),
-              ),
-            ),
-          ),
-          Align(
-            alignment: Alignment.bottomCenter,
-            child: Container(
-              width: double.infinity,
-              padding: const EdgeInsets.all(24),
-              color: Colors.black.withValues(alpha: 0.60),
-              child: const Text(
-                'Arahkan kamera ke barcode atau QR code pada label resi. '
-                'Setelah terdeteksi, aplikasi akan memeriksa pesanan.',
-                textAlign: TextAlign.center,
-                style: TextStyle(color: Colors.white, fontSize: 13, height: 1.5),
-              ),
-            ),
-          ),
-        ]),
       ),
     );
   }

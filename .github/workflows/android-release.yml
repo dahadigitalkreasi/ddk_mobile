@@ -100,12 +100,24 @@ jobs:
             --dart-define=API_BASE_URL=https://sandbox.dahakreasidigital.my.id/api
           )
 
-          if [ -n "$REVERB_WS_URL" ] && [ -n "$REVERB_APP_KEY" ]; then
-            ARGS+=(
-              "--dart-define=REVERB_WS_URL=$REVERB_WS_URL"
-              "--dart-define=REVERB_APP_KEY=$REVERB_APP_KEY"
-            )
+          if [ -z "$REVERB_WS_URL" ]; then
+            echo "ERROR: REVERB_WS_URL belum tersedia."
+            exit 1
           fi
+
+          if [ -z "$REVERB_APP_KEY" ]; then
+            echo "ERROR: REVERB_APP_KEY belum tersedia."
+            exit 1
+          fi
+
+          echo "REVERB_WS_URL: $REVERB_WS_URL"
+          echo "REVERB_APP_KEY tersedia."
+          echo "Panjang APP KEY: ${#REVERB_APP_KEY}"
+
+          ARGS+=(
+            "--dart-define=REVERB_WS_URL=$REVERB_WS_URL"
+            "--dart-define=REVERB_APP_KEY=$REVERB_APP_KEY"
+          )
 
           shorebird release android "${ARGS[@]}"
 
