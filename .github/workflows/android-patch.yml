@@ -80,6 +80,8 @@ jobs:
       - name: Test Shorebird Patch
         shell: bash
         run: |
+          shorebird --version
+
           shorebird patch android \
             --release-version=1.0.9+10 \
             --dry-run \
