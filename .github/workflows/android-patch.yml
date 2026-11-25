@@ -77,6 +77,13 @@ jobs:
       - name: Analyze Flutter
         run: flutter analyze
 
+      - name: Diagnose Android Dependencies
+        shell: bash
+        run: |
+          flutter pub get
+          cd android
+          chmod +x gradlew
+          ./gradlew :app:dependencies --configuration releaseRuntimeClasspath --console=plain > ../gradle-release-dependencies.txt
       - name: Test Shorebird Patch
         shell: bash
         run: |
@@ -89,3 +96,10 @@ jobs:
             --dart-define="API_BASE_URL=https://sandbox.dahakreasidigital.my.id/api" \
             --dart-define="REVERB_WS_URL=$REVERB_WS_URL" \
             --dart-define="REVERB_APP_KEY=$REVERB_APP_KEY"
+      - name: Upload Dependency Report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-dependency-report
+          path: gradle-release-dependencies.txt
+          if-no-files-found: warn
