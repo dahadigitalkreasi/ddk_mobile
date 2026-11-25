@@ -18,7 +18,7 @@ jobs:
     env:
       SHOREBIRD_TOKEN: ${{ secrets.SHOREBIRD_TOKEN }}
       REVERB_WS_URL: ${{ vars.REVERB_WS_URL }}
-      REVERB_APP_KEY: ${{ secrets.REVERB_APP_KEY_RELEASE_109 }}
+      REVERB_APP_KEY: ${{ secrets.REVERB_APP_KEY }}
 
     steps:
       - name: Checkout Repository
@@ -28,7 +28,7 @@ jobs:
         shell: bash
         run: |
           test "$GITHUB_REF_NAME" = "master" || exit 1
-          grep -q '^version: 1.0.9+10$' pubspec.yaml
+          grep -q '^version: 1.0.10+11$' pubspec.yaml
           test -n "$SHOREBIRD_TOKEN"
           test -n "$REVERB_WS_URL"
           test -n "$REVERB_APP_KEY"
@@ -83,7 +83,7 @@ jobs:
           shorebird --version
 
           shorebird patch android \
-            --release-version=1.0.9+10 \
+            --release-version=1.0.10+11 \
             --dry-run \
             --dart-define="API_BASE_URL=https://sandbox.dahakreasidigital.my.id/api" \
             --dart-define="REVERB_WS_URL=$REVERB_WS_URL" \
