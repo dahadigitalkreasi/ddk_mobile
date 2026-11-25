@@ -81,3 +81,7 @@ kotlin {
 flutter {
     source = "../.."
 }
+
+dependencyLocking {
+    lockAllConfigurations()
+}
