@@ -85,6 +85,7 @@ jobs:
           shorebird patch android \
             --release-version=1.0.10+11 \
             --dry-run \
+            --show-dex-diff \
             --dart-define="API_BASE_URL=https://sandbox.dahakreasidigital.my.id/api" \
             --dart-define="REVERB_WS_URL=$REVERB_WS_URL" \
             --dart-define="REVERB_APP_KEY=$REVERB_APP_KEY"
