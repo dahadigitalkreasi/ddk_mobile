@@ -18,7 +18,7 @@ jobs:
     env:
       SHOREBIRD_TOKEN: ${{ secrets.SHOREBIRD_TOKEN }}
       REVERB_WS_URL: ${{ vars.REVERB_WS_URL }}
-      REVERB_APP_KEY: ${{ secrets.REVERB_APP_KEY }}
+      REVERB_APP_KEY: ${{ secrets.REVERB_APP_KEY_RELEASE_109 }}
 
     steps:
       - name: Checkout Repository
