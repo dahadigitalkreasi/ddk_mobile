@@ -643,16 +643,23 @@ class _CsAddOrderPageState extends State<CsAddOrderPage> {
     return int.tryParse(controller.text.trim()) ?? 0;
   }
 
-  int get totalPrice {
-    switch (payment) {
-      case 'NON COD':
-        return amount(nonCod);
-      case 'DP':
-        // Untuk DP, total_harga API = sisa pembayaran (COD).
-        return amount(cod);
-      default:
-        return amount(cod);
-    }
+  // Hanya komponen pembayaran yang sesuai metode yang dihitung.
+  int get nilaiCod => payment == 'COD' || payment == 'DP' ? amount(cod) : 0;
+  int get nilaiNonCod => payment == 'NON COD' ? amount(nonCod) : 0;
+  int get nilaiDp => payment == 'DP' ? amount(dp) : 0;
+
+  // Total nominal yang benar-benar akan dikirim sebagai total_harga.
+  int get totalPrice => nilaiCod + nilaiNonCod + nilaiDp;
+
+  void _changePayment(String nextPayment) {
+    setState(() {
+      payment = nextPayment;
+      // Hilangkan nominal lama ketika mengganti metode pembayaran.
+      cod.text = '0';
+      nonCod.text = '0';
+      dp.text = '0';
+      paymentProof = null;
+    });
   }
 
   // Perhitungan HPP dari master produk Laravel.
@@ -665,8 +672,7 @@ class _CsAddOrderPageState extends State<CsAddOrderPage> {
         0, (sum, item) => sum + amount(item.qty),
       );
 
-  // Satu harga satuan diturunkan dari seluruh nilai transaksi / seluruh pcs.
-  // Untuk DP, nilai transaksi adalah DP + sisa COD; total_harga API tetap sisa COD.
+  // Harga jual satuan dihitung dari total transaksi / seluruh pcs.
   double get hargaJualOtomatis => totalJumlahProduk > 0
       ? nilaiTransaksi / totalJumlahProduk
       : 0;
@@ -674,11 +680,9 @@ class _CsAddOrderPageState extends State<CsAddOrderPage> {
   String hargaJualApi() => hargaJualOtomatis.toStringAsFixed(2);
 
   // Pembulatan ke rupiah terdekat (3,33% dari COD).
-  int get totalAdmin => (amount(cod) * 0.0333).round();
+  int get totalAdmin => (nilaiCod * 0.0333).round();
 
-  int get nilaiTransaksi => payment == 'DP'
-      ? amount(dp) + amount(cod)
-      : totalPrice;
+  int get nilaiTransaksi => totalPrice;
 
   String rupiah(int value) {
     final formatted = value.toString().replaceAllMapped(
@@ -751,6 +755,74 @@ class _CsAddOrderPageState extends State<CsAddOrderPage> {
     }
   }
 
+  // Dialog dapat digulir sehingga rincian validasi Laravel tidak terpotong.
+  Future<void> _showDetailedError(String title, String message) async {
+    if (!mounted) return;
+    await showDialog<void>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: Text(title),
+        content: SingleChildScrollView(
+          child: SelectableText(message),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(),
+            child: const Text('Tutup'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  String _submissionErrorDetail(DioException error) {
+    final status = error.response?.statusCode;
+    final body = error.response?.data;
+    final lines = <String>[
+      if (status != null) 'HTTP $status',
+      if (error.requestOptions.path.isNotEmpty)
+        'Endpoint: ${error.requestOptions.method} ${error.requestOptions.path}',
+    ];
+    if (body is Map) {
+      final msg = body['message'] ?? body['error'];
+      if (msg != null && msg.toString().trim().isNotEmpty) {
+        lines.add('Pesan server: $msg');
+      }
+      final data = body['data'];
+      if (data is Map && data['message'] != null) {
+        lines.add('Detail server: ${data['message']}');
+      }
+      final errors = body['errors'] ?? (data is Map ? data['errors'] : null);
+      if (errors is Map && errors.isNotEmpty) {
+        lines.add('Kesalahan validasi:');
+        for (final entry in errors.entries) {
+          final value = entry.value;
+          final detail = value is List ? value.join('; ') : value.toString();
+          lines.add('• ${entry.key}: $detail');
+        }
+      }
+    } else if (body is String && body.trim().isNotEmpty) {
+      // Jangan menampilkan halaman HTML error (berpotensi mengandung data server).
+      if (!body.trimLeft().startsWith('<')) {
+        lines.add('Pesan server: $body');
+      }
+    }
+    if (status == 401) lines.add('Sesi login tidak valid. Login ulang.');
+    if (status == 403) lines.add('Akun tidak memiliki hak akses membuat pesanan.');
+    if (status == 404) lines.add('Endpoint atau data pesanan tidak ditemukan.');
+    if (status == 422) lines.add('Periksa field yang disebut dalam validasi.');
+    if (status == 409) lines.add('Nomor pesanan bentrok; muat ulang nomor pesanan.');
+    if (status != null && status >= 500) {
+      lines.add('Terjadi kesalahan server. Periksa log Laravel berdasarkan waktu dan nomor pesanan.');
+    }
+    if (status == null) {
+      lines.add('Jenis kegagalan koneksi: ${error.type.name}');
+      lines.add('Tidak ada jawaban HTTP; pesanan mungkin sudah tersimpan. Periksa dahulu sebelum mengirim ulang.');
+    }
+    if (lines.length <= 2) lines.add('Tidak ada rincian tambahan dari server.');
+    return lines.join('\n');
+  }
+
   void showMessage(String message) {
     if (!mounted) return;
 
@@ -787,7 +859,7 @@ class _CsAddOrderPageState extends State<CsAddOrderPage> {
         address.text.trim().isNotEmpty || _provinceId != null ||
         _cityId != null || _districtId != null || _villageId != null ||
         payment != 'COD' || paymentProof != null ||
-        amount(cod) != 0 || amount(nonCod) != 0 || amount(dp) != 0 ||
+        nilaiCod != 0 || nilaiNonCod != 0 || nilaiDp != 0 ||
         products.length > 1) {
       return true;
     }
@@ -921,8 +993,16 @@ class _CsAddOrderPageState extends State<CsAddOrderPage> {
       return;
     }
 
-    if (totalPrice <= 0 || nilaiTransaksi <= 0) {
-      showMessage('Total pembayaran harus lebih dari nol.');
+    if (totalPrice <= 0) {
+      showMessage('Nominal ${payment == 'DP' ? 'DP dan sisa COD' : payment} harus lebih dari Rp0.');
+      return;
+    }
+    if (payment == 'COD' && amount(cod) <= 0) {
+      showMessage('Nominal COD harus lebih dari Rp0.');
+      return;
+    }
+    if (payment == 'NON COD' && amount(nonCod) <= 0) {
+      showMessage('Nominal NON COD harus lebih dari Rp0.');
       return;
     }
 
@@ -933,7 +1013,7 @@ class _CsAddOrderPageState extends State<CsAddOrderPage> {
 
 
     if (payment != 'COD' && paymentProof == null) {
-      showMessage('Bukti transfer wajib dipilih untuk NON COD atau DP.');
+      showMessage('Bukti transfer wajib dilampirkan untuk metode ${payment == 'DP' ? 'DP + Sisa COD' : 'NON COD'}.');
       return;
     }
 
@@ -1007,8 +1087,10 @@ class _CsAddOrderPageState extends State<CsAddOrderPage> {
                 _info('Total HPP', rupiah(totalHpp)),
                 _info('Total Nilai Transaksi', rupiah(nilaiTransaksi)),
                 _info('Biaya Admin 3,33% COD', rupiah(totalAdmin)),
-                if (payment == 'DP') _info('DP diterima', rupiah(amount(dp))),
-                _info(payment == 'DP' ? 'Total Harga API (sisa COD)' : 'Total Harga API', rupiah(totalPrice)),
+                _info('COD', rupiah(nilaiCod)),
+                _info('NON COD', rupiah(nilaiNonCod)),
+                _info('DP', rupiah(nilaiDp)),
+                _info('Total Harga API', rupiah(totalPrice)),
                 const Divider(height: 28),
                 ...products.map(
                   (item) => Padding(
@@ -1181,9 +1263,10 @@ class _CsAddOrderPageState extends State<CsAddOrderPage> {
         'alamat_lengkap': address.text.trim(),
         'phone': phone.text.trim(),
         'jenis_transaksi': payment == 'NON COD' ? 'non-cod' : payment.toLowerCase(),
-        'cod': payment == 'COD' || payment == 'DP' ? amount(cod) : 0,
-        'non_cod': payment == 'NON COD' ? amount(nonCod) : 0,
-        'dp': payment == 'DP' ? amount(dp) : 0,
+        // Sesuai metode: COD saja, NON COD saja, atau DP + sisa COD.
+        'cod': nilaiCod,
+        'non_cod': nilaiNonCod,
+        'dp': nilaiDp,
       };
       if (paymentProof != null) {
         final file = File(paymentProof!.path);
@@ -1231,8 +1314,12 @@ class _CsAddOrderPageState extends State<CsAddOrderPage> {
           sendTimeout: const Duration(seconds: 90),
         ),
       );
-      if (result.statusCode != 201 || result.data is! Map || result.data['success'] != true) {
-        throw const FormatException('Respons simpan pesanan tidak sesuai yang diharapkan.');
+      final savedBody = result.data;
+      final validStatus = result.statusCode == 201 || result.statusCode == 200;
+      if (!validStatus || savedBody is! Map || savedBody['success'] != true) {
+        throw FormatException('Respons simpan pesanan tidak sesuai. '
+            'HTTP ${result.statusCode}; pesan: '
+            '${savedBody is Map ? (savedBody['message'] ?? savedBody['error'] ?? savedBody['data']) : savedBody}');
       }
       if (!mounted) return;
       final savedNumber = (result.data['data'] is Map
@@ -1243,33 +1330,21 @@ class _CsAddOrderPageState extends State<CsAddOrderPage> {
     } on DioException catch (error) {
       if (!mounted) return;
       final status = error.response?.statusCode;
-      final body = error.response?.data;
-      String explanation = 'Gagal mengirim pesanan (${status ?? 'koneksi'}).';
-      if (body is Map) {
-        final errors = body['errors'];
-        if (errors is Map && errors.isNotEmpty) {
-          explanation = errors.entries.map((entry) =>
-            '${entry.key}: ${entry.value is List ? (entry.value as List).join(', ') : entry.value}'
-          ).join('\n');
-        } else if (body['message'] != null) {
-          explanation = body['message'].toString();
-        }
-      }
+      final detail = _submissionErrorDetail(error);
       if (status == 409) {
-        explanation += '\nNomor baru akan diminta. Data form tetap tersimpan; periksa dan kirim lagi.';
+        // Form tidak dihapus, hanya minta nomor pesanan baru.
         _loadOrderIdentity();
-      }
-      if (status == null) {
+      } else if (status == null) {
         setState(() {
           _submissionUncertain = true;
           _uncertainOrderNumber = _orderNumber;
-            });
-        explanation = 'Koneksi terputus atau waktu tunggu habis. Pesanan mungkin sudah tersimpan. '
-            'Tombol simpan dikunci sampai statusnya diperiksa.';
+        });
       }
-      showMessage(explanation);
+      await _showDetailedError('Gagal Menyimpan Pesanan', detail);
     } catch (error) {
-      showMessage(error.toString());
+      if (!mounted) return;
+      await _showDetailedError('Gagal Menyimpan Pesanan',
+          'Gagal memproses permintaan: $error');
     } finally {
       if (mounted) setState(() => _submitting = false);
     }
@@ -1722,26 +1797,26 @@ class _CsAddOrderPageState extends State<CsAddOrderPage> {
                         ),
                       ],
                       onChanged: (value) {
-                        if (value != null) {
-                          setState(() {
-                            payment = value;
-                            paymentProof = null;
-                          });
-                        }
+                        if (value != null) _changePayment(value);
                       },
                     ),
                     const SizedBox(height: 15),
-                    if (payment == 'COD' || payment == 'DP')
+                    if (payment == 'COD')
                       moneyField('Nominal COD (Rp)', cod),
                     if (payment == 'NON COD')
                       moneyField('Nominal NON COD (Rp)', nonCod),
-                    if (payment == 'DP') moneyField('Nominal DP (Rp)', dp),
-                    if (payment == 'DP') const Padding(
+                    if (payment == 'DP') ...[
+                      moneyField('Nominal DP (Rp)', dp),
+                      moneyField('Sisa COD (Rp)', cod),
+                    ],
+                    const Padding(
                       padding: EdgeInsets.only(bottom: 12),
-                      child: Text('Pada transaksi DP, total_harga API memakai sisa COD, bukan DP + COD.',
-                        style: TextStyle(fontSize: 12, color: Colors.black54)),
+                      child: Text(
+                        'Nominal metode lain otomatis Rp0. Total harga adalah jumlah nominal pembayaran yang aktif.',
+                        style: TextStyle(fontSize: 12, color: Colors.black54),
+                      ),
                     ),
-                    if (payment != 'COD') ...[
+                    if (payment == 'NON COD' || payment == 'DP') ...[
                       OutlinedButton.icon(
                         onPressed: selectPaymentProof,
                         icon: const Icon(Icons.upload_file),
@@ -1778,17 +1853,13 @@ class _CsAddOrderPageState extends State<CsAddOrderPage> {
 
                   section('05 · Rincian Pesanan', [
                     _info('Metode Bayar', payment),
-                    if (payment == 'COD' || payment == 'DP')
-                      _info('COD', rupiah(amount(cod))),
-                    if (payment == 'NON COD')
-                      _info('Transfer', rupiah(amount(nonCod))),
-                    if (payment == 'DP') _info('DP', rupiah(amount(dp))),
+                    _info('COD', rupiah(nilaiCod)),
+                    _info('NON COD', rupiah(nilaiNonCod)),
+                    _info('DP', rupiah(nilaiDp)),
                     const Divider(),
-                    _info('Nilai Transaksi', rupiah(nilaiTransaksi)),
+                    _info('Total Harga / Nilai Transaksi', rupiah(totalPrice)),
                     _info('Total HPP Produk', rupiah(totalHpp)),
                     _info('Admin (3,33% dari COD)', rupiah(totalAdmin)),
-                    if (payment == 'DP') _info('DP Dibayar', rupiah(amount(dp))),
-                    _info(payment == 'DP' ? 'Total Harga API (Sisa COD)' : 'Total Harga API', rupiah(totalPrice)),
                     _info('Jumlah Produk', '${products.length} jenis'),
                     const SizedBox(height: 8),
                     const Text(
