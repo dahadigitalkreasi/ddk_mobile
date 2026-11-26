@@ -11,7 +11,11 @@ import '../../../core/events/packing_history_updates.dart';
 import '../../chat/pages/chat_order_launcher.dart';
 
 class PackingScanPage extends StatefulWidget {
-  const PackingScanPage({super.key});
+  // Wajib disinkronkan dengan tab aktif pada parent IndexedStack.
+  // Default false agar kamera tidak hidup sebelum parent menyatakan tab aktif.
+  final bool isActive;
+
+  const PackingScanPage({super.key, this.isActive = false});
 
   @override
   State<PackingScanPage> createState() => _PackingScanPageState();
@@ -23,12 +27,19 @@ class _PackingScanPageState extends State<PackingScanPage>
   final resiController = TextEditingController();
   final List<Map<String, dynamic>> _readyOrders = [];
   final MobileScannerController _scannerController = MobileScannerController(
+    autoStart: false,
     detectionSpeed: DetectionSpeed.normal,
     detectionTimeoutMs: 900,
   );
   String? _lastDetectedResi;
   DateTime? _lastDetectedAt;
   bool _scanBusy = false;
+  bool _cameraRequested = false;
+  bool _appResumed = true;
+  bool _cameraStarting = false;
+
+  bool get _mayRunCamera => mounted && widget.isActive &&
+      _appResumed && _cameraRequested;
 
   Timer? _refreshTimer;
   String? _token;
@@ -84,17 +95,74 @@ class _PackingScanPageState extends State<PackingScanPage>
     WidgetsBinding.instance.addObserver(this);
     _initialize();
     _refreshTimer = Timer.periodic(const Duration(seconds: 30), (_) {
-      if (mounted && !processing && _token != null) {
+      if (mounted && widget.isActive && _appResumed &&
+          !processing && _token != null) {
         _loadReady(silent: true);
       }
     });
   }
 
   @override
-  void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.resumed && _token != null) {
+  void didUpdateWidget(covariant PackingScanPage oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.isActive && !widget.isActive) {
+      unawaited(_closeCamera());
+    } else if (!oldWidget.isActive && widget.isActive && _token != null) {
       _loadReady(silent: true);
     }
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      _appResumed = true;
+      if (widget.isActive && _token != null) _loadReady(silent: true);
+      // Setelah kembali dari background, kamera tetap mati sampai tombol diklik.
+    } else if (state == AppLifecycleState.inactive ||
+        state == AppLifecycleState.paused ||
+        state == AppLifecycleState.detached ||
+        state == AppLifecycleState.hidden) {
+      _appResumed = false;
+      unawaited(_closeCamera());
+    }
+  }
+
+  Future<void> _closeCamera() async {
+    // Segera lepaskan preview dari widget tree dan cegah deteksi tambahan.
+    if (mounted && _cameraRequested) {
+      setState(() => _cameraRequested = false);
+    } else {
+      _cameraRequested = false;
+    }
+
+    // Tunggu resource kamera dilepaskan, jangan hanya memulai stop().
+    try {
+      await _scannerController.stop();
+    } catch (error) {
+      debugPrint('Packing scanner stop: $error');
+    }
+  }
+
+  void _openCamera() {
+    if (!widget.isActive || !_appResumed || _cameraStarting || _cameraRequested) return;
+    setState(() => _cameraRequested = true);
+    // Tunggu MobileScanner terpasang di widget tree sebelum memanggil start().
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      if (!_mayRunCamera || _cameraStarting) return;
+      _cameraStarting = true;
+      try {
+        await _scannerController.start();
+        if (!_mayRunCamera) await _scannerController.stop();
+      } catch (error) {
+        debugPrint('Packing scanner start: $error');
+        if (mounted && _cameraRequested) {
+          setState(() => _cameraRequested = false);
+          message('Kamera gagal dibuka. Periksa izin kamera, lalu coba lagi.', isError: true);
+        }
+      } finally {
+        _cameraStarting = false;
+      }
+    });
   }
 
   Future<void> _initialize() async {
@@ -195,6 +263,10 @@ class _PackingScanPageState extends State<PackingScanPage>
       return;
     }
 
+    // Scanner yang sebelumnya aktif harus dibuka kembali setelah proses
+    // selesai, baik berhasil, gagal, ditolak, maupun dibatalkan.
+    // Input manual tidak menyalakan kamera yang sebelumnya mati.
+    final bool resumeCameraAfterScan = _scanBusy;
     setState(() => processing = true);
     try {
       final response = await ApiClient.dio.get<dynamic>(
@@ -267,6 +339,8 @@ class _PackingScanPageState extends State<PackingScanPage>
         throw Exception('Server belum mengonfirmasi status dikirim.');
       }
       if (!mounted) return;
+      // Kamera tetap dihentikan selama request dan dialog konfirmasi.
+      // Blok finally akan membukanya kembali apa pun hasil request.
       resiController.clear();
       // Perbarui Riwayat Pengiriman langsung, tanpa tombol refresh.
       notifyPackingHistoryUpdated();
@@ -275,14 +349,19 @@ class _PackingScanPageState extends State<PackingScanPage>
     } catch (error) {
       message(_errorMessage(error), isError: true);
     } finally {
-      if (mounted) setState(() => processing = false);
+      if (mounted) {
+        setState(() => processing = false);
+        if (resumeCameraAfterScan && widget.isActive && _appResumed) {
+          _openCamera();
+        }
+      }
     }
   }
 
   // Kamera tetap berada di halaman. Satu barcode hanya memicu satu
   // permintaan pada satu waktu, termasuk selama dialog konfirmasi terbuka.
   Future<void> _onCameraDetect(BarcodeCapture capture) async {
-    if (!mounted || processing || _scanBusy || _token == null) return;
+    if (!_mayRunCamera || processing || _scanBusy || _token == null) return;
 
     for (final barcode in capture.barcodes) {
       final resi = barcode.rawValue?.trim().toUpperCase();
@@ -301,6 +380,10 @@ class _PackingScanPageState extends State<PackingScanPage>
       _scanBusy = true;
       _lastDetectedResi = resi;
       _lastDetectedAt = now;
+      // Pause kamera saat konfirmasi agar barcode tidak dibaca berulang.
+      // Kamera dibuka kembali setelah proses selesai, apa pun hasilnya.
+      await _closeCamera();
+      if (!mounted) return;
       resiController.value = TextEditingValue(
         text: resi,
         selection: TextSelection.collapsed(offset: resi.length),
@@ -317,6 +400,19 @@ class _PackingScanPageState extends State<PackingScanPage>
   }
 
   Widget _liveCamera() {
+    if (!widget.isActive || !_cameraRequested || !_appResumed) {
+      return Padding(
+        padding: const EdgeInsets.fromLTRB(15, 14, 15, 0),
+        child: SizedBox(
+          width: double.infinity,
+          child: OutlinedButton.icon(
+            onPressed: widget.isActive && _appResumed ? _openCamera : null,
+            icon: const Icon(Icons.camera_alt_outlined),
+            label: const Text('Aktifkan Kamera Scan'),
+          ),
+        ),
+      );
+    }
     return Container(
       margin: const EdgeInsets.fromLTRB(15, 14, 15, 0),
       clipBehavior: Clip.antiAlias,
@@ -332,6 +428,15 @@ class _PackingScanPageState extends State<PackingScanPage>
             MobileScanner(
               controller: _scannerController,
               onDetect: _onCameraDetect,
+            ),
+            Positioned(
+              top: 6,
+              right: 6,
+              child: IconButton.filledTonal(
+                tooltip: 'Matikan kamera',
+                onPressed: () => unawaited(_closeCamera()),
+                icon: const Icon(Icons.close),
+              ),
             ),
             Center(
               child: IgnorePointer(
@@ -493,6 +598,7 @@ class _PackingScanPageState extends State<PackingScanPage>
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _refreshTimer?.cancel();
+    _cameraRequested = false;
     _loadSequence++;
     resiController.dispose();
     _scannerController.dispose();
@@ -527,7 +633,7 @@ class _PackingScanPageState extends State<PackingScanPage>
               ],
             ),
           ),
-          // Kamera selalu tampil dan langsung aktif saat halaman dibuka.
+          // Kamera OFF secara default. Dibuka hanya melalui tombol Scan.
           _liveCamera(),
           Expanded(
             child: RefreshIndicator(
