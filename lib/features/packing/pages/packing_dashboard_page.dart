@@ -33,6 +33,7 @@ class _PackingDashboardPageState extends State<PackingDashboardPage>
   int _terlambat = 0;
   bool _loading = true;
   bool _refreshing = false;
+  bool _hasLoadedOnce = false;
   String? _error;
   String _platform = '';
   int _requestId = 0;
@@ -113,8 +114,9 @@ class _PackingDashboardPageState extends State<PackingDashboardPage>
     if (mounted) {
       setState(() {
         _refreshing = true;
-        if (!silent) _loading = true;
-        _error = null;
+        // Refresh berkala tidak menghilangkan data yang sudah berhasil dimuat.
+        if (!silent && !_hasLoadedOnce) _loading = true;
+        if (!silent) _error = null;
       });
     }
 
@@ -138,6 +140,9 @@ class _PackingDashboardPageState extends State<PackingDashboardPage>
         throw Exception(result['message']?.toString() ??
             'Dashboard Packing gagal dimuat.');
       }
+      if (result['data'] is! Map) {
+        throw const FormatException('Format data Dashboard Packing tidak sesuai API.');
+      }
       final data = _asMap(result['data']);
       if (!mounted || requestId != _requestId) return;
       setState(() {
@@ -146,11 +151,23 @@ class _PackingDashboardPageState extends State<PackingDashboardPage>
         _dikirim = _asInt(data['dikirim']);
         _terlambat = _asInt(data['terlambat']);
         _platform = (platform ?? '').toLowerCase();
+        _hasLoadedOnce = true;
         _error = null;
       });
     } catch (error) {
       if (!mounted || requestId != _requestId) return;
-      setState(() => _error = _errorMessage(error));
+      final status = error is DioException ? error.response?.statusCode : null;
+      // Error otorisasi harus tetap diberitahukan walaupun data cache ada.
+      final isAuthError = status == 401 || status == 403 ||
+          (error is Exception &&
+              error.toString().contains('Sesi login tidak tersedia'));
+      // Refresh otomatis kadang gagal karena timeout/koneksi; jangan membuat
+      // banner merah ketika data sebelumnya masih valid.
+      if (!silent || !_hasLoadedOnce || isAuthError) {
+        setState(() => _error = _errorMessage(error));
+      }
+      debugPrint('Packing dashboard refresh gagal '
+          '(silent=$silent, status=${status ?? '-'}): $error');
     } finally {
       if (mounted && requestId == _requestId) {
         setState(() {
@@ -401,7 +418,7 @@ class _PackingDashboardPageState extends State<PackingDashboardPage>
                               style: const TextStyle(color: Colors.red)),
                           const SizedBox(height: 8),
                           TextButton.icon(
-                            onPressed: _refreshing ? null : _loadDashboard,
+                            onPressed: _refreshing ? null : () => _loadDashboard(),
                             icon: const Icon(Icons.refresh),
                             label: const Text('Coba lagi'),
                           ),
@@ -420,7 +437,7 @@ class _PackingDashboardPageState extends State<PackingDashboardPage>
                     ),
                     IconButton(
                       tooltip: 'Perbarui dashboard',
-                      onPressed: _refreshing ? null : _loadDashboard,
+                      onPressed: _refreshing ? null : () => _loadDashboard(),
                       icon: const Icon(Icons.refresh),
                     ),
                   ]),

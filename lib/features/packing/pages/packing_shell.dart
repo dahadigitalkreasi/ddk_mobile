@@ -335,7 +335,9 @@ class _PackingShellState extends State<PackingShell>
         onOpenScan: () => changePage(2),
       ),
       if (_isMeta) const PackingPhotoPage(),
-      const PackingScanPage(),
+      PackingScanPage(
+        isActive: selectedIndex == 2,
+      ),
       const PackingHistoryPage(),
       if (_isMeta) ChatListPage(key: ValueKey(chatRefreshKey)),
       ProfilePage(onLogout: logout),
