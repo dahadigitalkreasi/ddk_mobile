@@ -285,8 +285,7 @@ class _LoginPageState extends State<LoginPage> {
                         const SizedBox(height: 6),
 
                         const Text(
-                          'Masukkan username dan password '
-                          'akun karyawan.',
+                          'Masukkan username dan password ',
                           style: TextStyle(
                             fontSize: 12,
                             color: Colors.black54,
