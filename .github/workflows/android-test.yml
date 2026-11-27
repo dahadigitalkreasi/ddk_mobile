@@ -1,0 +1,82 @@
+name: DDK Mobile - APK Sandbox Tester
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout develop
+        uses: actions/checkout@v4
+        with:
+          ref: develop
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.47.9'
+          channel: stable
+          cache: true
+
+      - name: Restore Android Signing
+        shell: bash
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          STORE_PASSWORD: ${{ secrets.ANDROID_STORE_PASSWORD }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+        run: |
+          set -e
+          test -n "$KEYSTORE_BASE64"
+          test -n "$STORE_PASSWORD"
+          test -n "$KEY_PASSWORD"
+          test -n "$KEY_ALIAS"
+
+          printf '%s' "$KEYSTORE_BASE64" | base64 --decode \
+            > android/app/upload-keystore.jks
+
+          {
+            echo "storePassword=$STORE_PASSWORD"
+            echo "keyPassword=$KEY_PASSWORD"
+            echo "keyAlias=$KEY_ALIAS"
+            echo "storeFile=upload-keystore.jks"
+          } > android/key.properties
+
+      - name: Install Dependencies
+        run: flutter pub get
+
+      - name: Analyze
+        run: flutter analyze
+
+      - name: Build Sandbox APK
+        shell: bash
+        env:
+          REVERB_WS_URL: ${{ vars.REVERB_WS_URL }}
+          REVERB_APP_KEY: ${{ secrets.REVERB_APP_KEY }}
+        run: |
+          set -e
+          test -n "$REVERB_WS_URL"
+          test -n "$REVERB_APP_KEY"
+
+          flutter build apk --release \
+            --dart-define=API_BASE_URL=https://sandbox.dahakreasidigital.my.id/api \
+            "--dart-define=REVERB_WS_URL=$REVERB_WS_URL" \
+            "--dart-define=REVERB_APP_KEY=$REVERB_APP_KEY"
+
+      - name: Upload Tester APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: DDK-Mobile-v1.0.11-Sandbox-Tester
+          path: build/app/outputs/flutter-apk/app-release.apk
+          if-no-files-found: error
