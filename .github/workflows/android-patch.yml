@@ -28,7 +28,7 @@ jobs:
         shell: bash
         run: |
           test "$GITHUB_REF_NAME" = "master" || exit 1
-          grep -q '^version: 1.0.10+11$' pubspec.yaml
+          grep -q '^version: 1.0.13+14$' pubspec.yaml
           test -n "$SHOREBIRD_TOKEN"
           test -n "$REVERB_WS_URL"
           test -n "$REVERB_APP_KEY"
@@ -90,7 +90,7 @@ jobs:
           shorebird --version
 
           shorebird patch android \
-            --release-version=1.0.10+11 \
+            --release-version=1.0.13+14 \
             --dry-run \
             --show-dex-diff \
             --dart-define="API_BASE_URL=https://sandbox.dahakreasidigital.my.id/api" \
