@@ -84,7 +84,7 @@ jobs:
           cd android
           chmod +x gradlew
           ./gradlew :app:dependencies --configuration releaseRuntimeClasspath --console=plain > ../gradle-release-dependencies.txt
-      - name: Test Shorebird Patch
+            - name: Test Shorebird Patch
         shell: bash
         run: |
           shorebird --version
@@ -92,6 +92,7 @@ jobs:
           shorebird patch android \
             --release-version=1.0.13+14 \
             --track=staging \
+            --allow-native-diffs \
             --show-dex-diff \
             --dart-define="API_BASE_URL=https://sandbox.dahakreasidigital.my.id/api" \
             --dart-define="REVERB_WS_URL=$REVERB_WS_URL" \
